@@ -4,6 +4,8 @@ const nextConfig = {
     remotePatterns: [
       { protocol: "http", hostname: "127.0.0.1", port: "8001", pathname: "/**" },
       { protocol: "http", hostname: "localhost", port: "8001", pathname: "/**" },
+      { protocol: "https", hostname: "tryfit-ai-backend.onrender.com", pathname: "/**" },
+      { protocol: "https", hostname: "*.onrender.com", pathname: "/**" },
     ],
   },
   // Next.js 14.2.x's built-in type-check step can crash with
