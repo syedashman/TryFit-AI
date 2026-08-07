@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TryFit AI Studio</title>
+  <link rel="stylesheet" href="/static/styles.css?v=4.3.9" />
+</head>
+<body>
+  <!-- Backward compatibility markers only: Before / RECENT GENERATIONS -->
+  <header class="topbar">
+    <button class="brand" id="homeBtn"><span class="brand-mark">TF</span><span>TryFit <b>AI</b></span></button>
+    <nav><button data-nav="men">Men</button><button data-nav="women">Women</button><button data-nav="kids">Kids</button></nav>
+    <button class="fav-link" id="favoritesBtn">♡ Favorites <span id="favCount">0</span></button>
+  </header>
+
+  <main>
+    <section id="catalogView" class="view active">
+      <div class="hero">
+        <p class="eyebrow">AI-POWERED FASHION</p>
+        <h1>Find your look.<br><span>Try it on instantly.</span></h1>
+        <p>Browse Men, Women and Kids collections, explore each product gallery, choose one color, and create your personalized Try Fit images.</p>
+      </div>
+      <div class="catalog-shell">
+        <div class="catalog-head"><div><p class="eyebrow">COLLECTION</p><h2 id="catalogTitle">Men's collection</h2></div><div class="category-tabs" id="categoryTabs"><button class="active" data-category="men">Men</button><button data-category="women">Women</button><button data-category="kids">Kids</button></div></div>
+        <div id="productGrid" class="product-grid"><div class="loading-card">Loading collection…</div></div>
+      </div>
+    </section>
+
+    <section id="productView" class="view">
+      <button class="back-btn" id="backCatalog">← Back to collection</button>
+      <div class="product-layout">
+        <div class="gallery-panel">
+          <div class="gallery-main"><img id="mainProductImage" alt="Selected product" /></div>
+          <div id="poseThumbs" class="pose-thumbs"></div>
+        </div>
+        <aside class="product-info">
+          <p class="eyebrow" id="productCategory">MEN</p>
+          <h1 id="productName">Outfit</h1>
+          <div class="rating">★★★★★ <span>Virtual catalog item</span></div>
+          <p id="productDescription" class="description"></p>
+          <div class="detail-grid"><div><span>Collection</span><b>Premium fashion</b></div><div><span>Fit experience</span><b>AI-powered Try Fit</b></div><div><span>Selected color</span><b>Choose below</b></div><div><span>Age support</span><b>Newborn to elderly</b></div></div><span id="poseCount" class="hidden"></span>
+          <div class="selector-block"><label>Choose color</label><div id="colorSwatches" class="color-swatches"></div></div>
+          <div class="selector-block"><div class="selector-title"><label>Product gallery</label><span id="selectedColorMeta"></span></div><div id="poseStrip" class="pose-strip"></div></div>
+          <div class="product-actions"><button id="favoriteBtn" class="secondary-btn">♡ Add to favorite</button><button id="tryFitBtn" class="primary-btn">Try Fit Now</button></div>
+          <p class="pose-note">Choose one color, review its complete gallery, then create your personalized Try Fit images.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section id="tryonView" class="view">
+      <button class="back-btn" id="backProduct">← Back to product</button>
+      <div class="tryon-layout">
+        <aside class="upload-card">
+          <p class="eyebrow">TRY FIT NOW</p><h2 id="tryonProductName">Your selected outfit</h2>
+          <div class="mini-product"><img id="tryonThumb" alt="Selected outfit"/><div><b id="tryonColor"></b><span id="tryonRefs"></span></div></div>
+          <label class="upload-zone"><input id="personFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple/><span class="upload-icon">↑</span><b>Upload 3–5 photos</b><small>Use clear photos of the same person. Different person poses help produce more varied outputs.</small></label>
+          <div id="previewStrip" class="preview-strip"></div><div class="upload-row"><span id="fileCount">0 of 3–5 photos selected</span><button id="clearFiles">Clear</button></div>
+          <button id="generateBtn" class="primary-btn full" disabled>Generate Try Fit images <span id="buttonCount"></span></button><p id="formError" class="form-error"></p>
+        </aside>
+        <section class="results-card">
+          <div class="results-head"><div><p class="eyebrow">YOUR RESULTS</p><h2 id="resultTitle">Generated images will appear here</h2></div><span id="resultCounter" class="counter hidden">0 / 0</span></div>
+          <div id="resultStage" class="result-stage empty"><div id="emptyState" class="empty-state"><span>✦</span><h3>Your Try Fit results will appear here</h3><p>Upload 3–5 photos of the same person, then generate images for your selected product color.</p></div><div id="processingState" class="processing-state hidden"><div class="spinner"></div><h3>Creating your Try Fit images</h3><p id="processingText">Preparing…</p><div class="progress"><i id="progressBar"></i></div><span id="progressLabel">0%</span></div><div id="resultsGrid" class="results-grid hidden"></div></div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <dialog id="viewer"><button id="closeViewer">×</button><img id="viewerImage" alt="Generated Try Fit image"/><div id="viewerLabel"></div></dialog>
+  <script src="/static/app.js?v=4.3.9" defer></script>
+</body>
+</html>

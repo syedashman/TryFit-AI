@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background-color: #F3EEE0;
+  color: #1B1B18;
+}
+
+.thread-divider {
+  height: 2px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    #B8923D 0px,
+    #B8923D 10px,
+    transparent 10px,
+    transparent 18px
+  );
+}
+
+.fabric-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.fabric-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(
+    115deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 100%
+  );
+  transition: left 0.6s ease;
+}
+
+.fabric-shimmer:hover::after {
+  left: 150%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fabric-shimmer::after {
+    transition: none;
+    display: none;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid #B8923D;
+  outline-offset: 2px;
+}
+
+@keyframes drawer-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.drawer-slide-in {
+  animation: drawer-slide-in 0.28s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-slide-in {
+    animation: none;
+  }
+}

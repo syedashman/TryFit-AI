@@ -1,0 +1,12 @@
+.............................................................            [100%]
+=============================== warnings summary ===============================
+tests/test_sprint_3_3_phase_2.py: 32 warnings
+  /mnt/data/s4work/TRYFIT_AI_SPRINT_3_3_PHASE_4_COMPLETE_FINALllll/backend/app/services/person_validation.py:297: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    sample.getdata()
+
+tests/test_sprint_3_3_phase_2.py: 32 warnings
+  /mnt/data/s4work/TRYFIT_AI_SPRINT_3_3_PHASE_4_COMPLETE_FINALllll/backend/app/services/person_validation.py:211: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    for value in gray.getdata()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+61 passed, 64 warnings in 2.76s

@@ -1,0 +1,4 @@
+Sprint 4 Phase 2 verification
+Command: python -m pytest -q
+Result: 67 passed, 64 warnings in 2.68s
+Warnings are Pillow deprecation notices from existing person-validation code; no test failures.

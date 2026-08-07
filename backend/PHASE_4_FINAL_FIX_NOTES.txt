@@ -1,0 +1,34 @@
+TRYFIT AI - Sprint 3.3 Phase 4 Final Fix
+
+Confirmed fixes:
+1. Fixed PydanticSerializationError caused by numpy.bool_, numpy integer,
+   numpy float, and NumPy array values inside validation/provider metadata.
+2. Added recursive JSON-safe conversion at the job storage boundary.
+3. Explicitly converts candidate hard-rejection flags, scores, and penalties
+   to native Python bool/float values.
+4. Fixed missing geometry_similarity import used by the single-candidate
+   Vertex path.
+5. Added regression tests for NumPy serialization and persisted job loading.
+6. Included the supplied three test person images in SAMPLE_TEST_IMAGES.
+7. Included backend/.env with configured Phase 4 values.
+
+Automated test result before packaging:
+56 passed
+
+Windows start commands:
+cd backend
+py -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m pytest
+uvicorn app.main:app --reload --port 8001
+
+Google authentication:
+The included .env uses Application Default Credentials because the tested
+machine successfully reached Vertex with HTTP 200. Before starting the API,
+use the same Windows account where this has already been configured, or run:
+
+gcloud auth application-default login
+
+Swagger:
+http://127.0.0.1:8001/docs
