@@ -14,6 +14,7 @@ from app.services.commercial_prompt import build_commercial_instructions
 from app.services.garment_analyzer import analyze_garment
 from app.services.job_service import process_job
 from app.services.person_validation import validate_person_images
+from app.services.photo_category_check import check_photos_match_category
 from app.services.storage import list_jobs, save_job, save_upload
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -159,6 +160,12 @@ async def generate_catalog_tryon(
         for path in person_paths:
             path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail={"code": "person_images_rejected", "message": "Person image validation failed.", "validation": report.to_dict()})
+
+    category_ok, category_error = check_photos_match_category(settings, person_paths, category_name)
+    if not category_ok:
+        for path in person_paths:
+            path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail={"code": "photo_category_mismatch", "message": category_error})
 
     validation_data = report.to_dict()
     geometry_index = validation_data.get("geometry_reference_index")
