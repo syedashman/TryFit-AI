@@ -174,31 +174,28 @@ async def generate_catalog_tryon(
     person_geometry_profiles = [build_body_geometry_profile(path) for path in person_paths]
     geometry_profile = person_geometry_profiles[geometry_index]
 
-    # Evaluate every catalog photo for this product/color and keep only the
-    # single one whose pose best matches the uploaded person photos. This
-    # guarantees exactly one Try Fit job/result per request, regardless of
-    # how many reference images the catalog product has, which keeps the
-    # generated image consistent instead of producing one output per photo.
-    best_garment_path: Path | None = None
-    best_matched_person_index = 0
-    best_pose_match_score = -1.0
-    for candidate_path in garment_paths:
-        try:
-            candidate_geometry = build_body_geometry_profile(candidate_path)
-            candidate_person_index = max(
-                range(len(person_geometry_profiles)),
-                key=lambda candidate_index: geometry_similarity(candidate_geometry, person_geometry_profiles[candidate_index]),
-            )
-            candidate_score = geometry_similarity(candidate_geometry, person_geometry_profiles[candidate_person_index])
-        except Exception:
-            candidate_person_index = 0
-            candidate_score = 0.0
-        if candidate_score > best_pose_match_score:
-            best_pose_match_score = candidate_score
-            best_matched_person_index = candidate_person_index
-            best_garment_path = candidate_path
+    selected_framing = str(report.images[geometry_index].framing) if geometry_index < len(report.images) else "unknown"
+    if selected_framing not in {"full_body", "three_quarter"}:
+        for path in person_paths:
+            path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "full_body_photo_required",
+                "message": "Please include at least one full-body photo (head to feet, standing) so we can generate a full-body result, matching how the product is shown.",
+            },
+        )
 
-    garment_paths = [best_garment_path or garment_paths[0]]
+    # Always send the uploaded photo whose framing already best supports a
+    # full-body render (computed above by person validation), and always use
+    # the product's primary catalog photo as the garment reference. We
+    # deliberately do NOT try to match the garment's pose to a particular
+    # uploaded photo anymore — Vertex preserves the *person* photo's
+    # framing, so matching against a close-up catalog shot could pick a
+    # half-body/seated upload and produce a half-body/seated result.
+    best_matched_person_index = geometry_index
+    best_pose_match_score = 1.0
+    garment_paths = [garment_paths[0]]
 
     batch_id = uuid4().hex
     jobs: list[JobRecord] = []

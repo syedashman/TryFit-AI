@@ -12,11 +12,13 @@ export default function CameraCapture({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
 
   useEffect(() => {
     let cancelled = false;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "user" }, audio: false })
+      .getUserMedia({ video: { facingMode }, audio: false })
       .then((stream) => {
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
@@ -33,7 +35,7 @@ export default function CameraCapture({
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [facingMode]);
 
   function capture() {
     const video = videoRef.current;
@@ -43,8 +45,11 @@ export default function CameraCapture({
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
+    if (facingMode === "user") {
+      // Mirror only the front camera preview, matching how it's shown live.
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
       if (blob) {
@@ -55,10 +60,21 @@ export default function CameraCapture({
 
   return (
     <div className="rounded-md border border-ink/10 bg-ink/90 p-3">
+      <div className="mb-2 flex justify-end">
+        <button
+          onClick={() => setFacingMode((m) => (m === "user" ? "environment" : "user"))}
+          className="rounded-full bg-parchment/10 px-3 py-1 text-xs font-medium text-parchment hover:bg-parchment/20"
+        >
+          🔄 Switch to {facingMode === "user" ? "back" : "front"} camera
+        </button>
+      </div>
       {error ? (
         <p className="p-4 text-center text-sm text-parchment">{error}</p>
       ) : (
-        <div className="relative overflow-hidden rounded" style={{ transform: "scaleX(-1)" }}>
+        <div
+          className="relative overflow-hidden rounded"
+          style={facingMode === "user" ? { transform: "scaleX(-1)" } : undefined}
+        >
           <video ref={videoRef} autoPlay playsInline muted className="w-full rounded" />
         </div>
       )}
