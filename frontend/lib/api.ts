@@ -107,6 +107,24 @@ export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
   return res.json();
 }
 
+export async function retryJob(jobId: string): Promise<{ job_id: string; message: string }> {
+  const res = await fetch(`${API_BASE}/api/catalog/retry/${jobId}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to retry (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchJobStatus(jobId: string): Promise<BatchJob> {
+  const res = await fetch(`${API_BASE}/api/jobs/${jobId}`, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`Failed to load job status (${res.status})`);
+  }
+  return res.json();
+}
+
 export function jobResultUrl(jobId: string): string {
   return `${API_BASE}/api/jobs/${jobId}/result`;
 }

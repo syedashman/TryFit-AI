@@ -411,7 +411,6 @@ def _classify_framing(
         very_tall_canvas
         and subject_height_ratio >= 0.62
         and standing_shape
-        and skin_fraction < 0.35
     ):
         framing = "full_body"
 
@@ -419,19 +418,18 @@ def _classify_framing(
         tall_canvas
         and subject_height_ratio >= 0.50
         and subject_aspect_ratio <= 0.92
-        and skin_fraction < 0.34
     ):
         framing = "three_quarter"
 
     elif (
         body_score >= 0.95
-        and skin_fraction < 0.30
+        and skin_fraction < 0.36
     ):
         framing = "full_body"
 
     elif (
         body_score >= 0.78
-        and skin_fraction < 0.32
+        and skin_fraction < 0.36
     ):
         framing = "three_quarter"
 

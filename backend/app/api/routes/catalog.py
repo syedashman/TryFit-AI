@@ -15,7 +15,7 @@ from app.services.garment_analyzer import analyze_garment
 from app.services.job_service import process_job
 from app.services.person_validation import validate_person_images
 from app.services.photo_category_check import check_photos_match_category
-from app.services.storage import list_jobs, save_job, save_upload
+from app.services.storage import list_jobs, load_job, save_job, save_upload
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 QualityPreset = Literal["fast", "balanced", "high"]
@@ -186,20 +186,15 @@ async def generate_catalog_tryon(
             },
         )
 
-    # Always send the uploaded photo whose framing already best supports a
-    # full-body render (computed above by person validation), and always use
-    # the product's primary catalog photo as the garment reference. We
-    # deliberately do NOT try to match the garment's pose to a particular
-    # uploaded photo anymore — Vertex preserves the *person* photo's
-    # framing, so matching against a close-up catalog shot could pick a
-    # half-body/seated upload and produce a half-body/seated result.
     best_matched_person_index = geometry_index
     best_pose_match_score = 1.0
-    garment_paths = [garment_paths[0]]
+    primary_garment_path = garment_paths[0]
+    target_poses = ["front", "side", "back"]
 
     batch_id = uuid4().hex
     jobs: list[JobRecord] = []
-    for index, garment_path in enumerate(garment_paths, start=1):
+    for index, target_pose in enumerate(target_poses, start=1):
+        garment_path = primary_garment_path
         relative = garment_path.relative_to(product_dir)
         color_name = relative.parts[0] if len(relative.parts) > 1 else "Default"
         analysis = analyze_garment(garment_path, garment_description, cloth_type)
@@ -209,7 +204,7 @@ async def generate_catalog_tryon(
         record = JobRecord(
             job_id=job_id,
             provider=settings.vton_provider,
-            message=f"Queued {index} of {len(garment_paths)}.",
+            message=f"Queued {index} of {len(target_poses)} ({target_pose} pose).",
             person_file=str(person_paths[matched_person_index]),
             person_files=[str(path) for path in person_paths],
             selected_person_index=report.selected_index,
@@ -242,9 +237,10 @@ async def generate_catalog_tryon(
                 "catalog_pose": garment_path.stem,
                 "catalog_reference": f"/static/catalog/{category_name}/{product_number}/{relative.as_posix()}",
                 "batch_index": index,
-                "batch_total": len(garment_paths),
+                "batch_total": len(target_poses),
+                "target_pose": target_pose,
                 "age_neutral_validation": True,
-                "pose_source_strategy": "reference_geometry_matched_uploaded_photo",
+                "pose_source_strategy": "fixed_three_pose_customization",
                 "person_source_index": matched_person_index,
                 "pose_match_score": round(float(pose_match_score), 4),
                 "product_integrity_lock": True,
@@ -296,3 +292,55 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
         "counts": counts,
         "jobs": [item.model_dump() for item in jobs],
     }
+
+
+@router.post("/retry/{job_id}", operation_id="retry_catalog_tryon_job")
+def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, object]:
+    settings = get_settings()
+    original = load_job(job_id, settings)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    new_job_id = uuid4().hex
+    new_seed = original.request_parameters.get("seed")
+    if isinstance(new_seed, (int, float)):
+        new_seed = int(new_seed) + 1000 + (hash(new_job_id) % 9000)
+    else:
+        new_seed = hash(new_job_id) % 100000
+
+    new_metadata = dict(original.provider_metadata or {})
+    new_metadata["retried_from"] = job_id
+
+    record = JobRecord(
+        job_id=new_job_id,
+        provider=original.provider,
+        message="Retrying this pose.",
+        person_file=original.person_file,
+        person_files=list(original.person_files),
+        selected_person_index=original.selected_person_index,
+        validation_report=dict(original.validation_report),
+        geometry_profile=dict(original.geometry_profile),
+        geometry_reference_index=original.geometry_reference_index,
+        garment_file=original.garment_file,
+        garment_description=original.garment_description,
+        cloth_type=original.cloth_type,
+        show_type=original.show_type,
+        quality_preset=original.quality_preset,
+        garment_analysis=dict(original.garment_analysis),
+        commercial_instructions=original.commercial_instructions,
+        request_parameters={
+            **original.request_parameters,
+            "seed": new_seed,
+        },
+        provider_metadata=new_metadata,
+    )
+    save_job(record, settings)
+    background_tasks.add_task(
+        process_job,
+        new_job_id,
+        settings,
+        num_inference_steps=record.request_parameters.get("num_inference_steps"),
+        guidance_scale=record.request_parameters.get("guidance_scale"),
+        seed=new_seed,
+    )
+    return {"job_id": new_job_id, "message": "Retrying this pose."}
