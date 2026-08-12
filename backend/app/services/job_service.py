@@ -226,6 +226,34 @@ def process_job(
                 record.person_file
             )
 
+        target_pose = (record.provider_metadata or {}).get("target_pose")
+        if target_pose:
+            try:
+                category = (record.provider_metadata or {}).get("catalog_category", "person")
+                subject_description = {
+                    "men": "an adult man with masculine facial features and a masculine hairstyle — the output must clearly read as male, not androgynous or female",
+                    "women": "an adult woman with feminine facial features and long or clearly feminine hair — the output must clearly read as female, not androgynous or male",
+                    "kids": "a child",
+                }.get(category, "a person")
+                from app.services.pose_customization import generate_posed_reference
+
+                posed_path = generate_posed_reference(
+                    settings,
+                    identity_paths=[Path(p) for p in record.person_files] or [render_person],
+                    pose_name=target_pose,
+                    subject_description=subject_description,
+                    output_dir=Path(settings.storage_dir) / "pose_cache",
+                )
+                render_person = posed_path
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Pose normalization to '%s' failed for job %s, "
+                    "falling back to the shopper's original photo: %s",
+                    target_pose,
+                    job_id,
+                    exc,
+                )
+
         person_files = [
             Path(item)
             for item in (

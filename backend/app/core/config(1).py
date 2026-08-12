@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     hf_cloth_type: str = "overall"
     hf_show_type: str = "result only"
     hf_num_inference_steps: int = 50
+
+    # Which backend generate_posed_reference() uses for the side/back pose
+    # step: "gemini" (default, uses gemini-2.5-flash-image) or "instantid"
+    # (free HF Space, InsightFace-based — non-commercial research license,
+    # fine for demos, revisit before commercial launch).
+    pose_provider: str = "gemini"
+    instantid_space: str = "InstantX/InstantID"
     hf_guidance_scale: float = 2.5
     hf_seed: int = 42
     hf_enable_fallback: bool = True

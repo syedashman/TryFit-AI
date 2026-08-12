@@ -5,10 +5,13 @@ import Image from "next/image";
 import {
   BatchStatus,
   fetchBatchStatus,
+  fetchJobStatus,
   generateTryOn,
   jobResultUrl,
+  retryJob,
 } from "@/lib/api";
 import CameraCapture from "./CameraCapture";
+import ImageLightbox from "./ImageLightbox";
 
 type Stage = "upload" | "submitting" | "processing" | "done" | "error";
 
@@ -30,6 +33,8 @@ export default function TryOnStudio({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [batch, setBatch] = useState<BatchStatus | null>(null);
   const [showCamera, setShowCamera] = useState(false);
+  const [lightboxJob, setLightboxJob] = useState<string | null>(null);
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -106,6 +111,70 @@ export default function TryOnStudio({
       setErrorMessage(
         err instanceof Error ? err.message : "Could not start generation."
       );
+    }
+  }
+
+  async function retryPose(oldJobId: string) {
+    setRetryingIds((prev) => new Set(prev).add(oldJobId));
+    try {
+      const res = await retryJob(oldJobId);
+      const newId = res.job_id;
+      setBatch((prev) =>
+        prev
+          ? {
+              ...prev,
+              jobs: prev.jobs.map((j) =>
+                j.job_id === oldJobId
+                  ? {
+                      ...j,
+                      job_id: newId,
+                      status: "processing",
+                      message: "Retrying this pose...",
+                      error: null,
+                    }
+                  : j
+              ),
+            }
+          : prev
+      );
+      setRetryingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(oldJobId);
+        next.add(newId);
+        return next;
+      });
+
+      for (let attempt = 0; attempt < 40; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        const status = await fetchJobStatus(newId);
+        if (status.status === "completed" || status.status === "failed") {
+          setBatch((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  jobs: prev.jobs.map((j) => (j.job_id === newId ? status : j)),
+                }
+              : prev
+          );
+          setRetryingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(newId);
+            return next;
+          });
+          return;
+        }
+      }
+      setRetryingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(newId);
+        return next;
+      });
+    } catch {
+      setRetryingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(oldJobId);
+        return next;
+      });
     }
   }
 
@@ -262,38 +331,73 @@ export default function TryOnStudio({
           <p className="font-display text-lg text-ink">
             {batch.all_successful
               ? "Here's how it looks on you"
-              : "Couldn't generate this one"}
+              : "Here's what we could generate"}
           </p>
-          <div className="mt-4">
-            {batch.jobs.map((job) => (
-              <div
-                key={job.job_id}
-                className="overflow-hidden rounded-md border border-ink/10"
-              >
-                {job.status === "completed" ? (
-                  <div className="relative aspect-[3/4]">
-                    <Image
-                      src={jobResultUrl(job.job_id)}
-                      alt="Try-on result"
-                      fill
-                      sizes="480px"
-                      className="object-cover"
-                      unoptimized
-                    />
-                  </div>
-                ) : (
-                  <div className="flex aspect-[3/4] flex-col items-center justify-center gap-2 bg-ink/5 p-6 text-center">
-                    <p className="text-sm font-semibold text-rani-deep">
-                      Couldn&apos;t generate this one
-                    </p>
-                    <p className="text-xs text-ink/50">
-                      {job.error || job.message}
-                    </p>
-                  </div>
-                )}
-              </div>
-            ))}
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {batch.jobs.map((job) => {
+              const isRetrying = retryingIds.has(job.job_id);
+              return (
+                <div
+                  key={job.job_id}
+                  className="relative overflow-hidden rounded-md border border-ink/10"
+                >
+                  {job.status === "completed" ? (
+                    <button
+                      onClick={() => setLightboxJob(job.job_id)}
+                      className="relative block aspect-[3/4] w-full bg-ink/5"
+                      aria-label="View full size"
+                    >
+                      <Image
+                        src={jobResultUrl(job.job_id)}
+                        alt="Try-on result"
+                        fill
+                        sizes="200px"
+                        className="object-contain"
+                        unoptimized
+                      />
+                    </button>
+                  ) : job.status === "processing" || job.status === "queued" ? (
+                    <div className="flex aspect-[3/4] flex-col items-center justify-center gap-2 bg-ink/5 p-2 text-center">
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-gold border-t-transparent" />
+                      <p className="text-[10px] text-ink/50">{job.message}</p>
+                    </div>
+                  ) : (
+                    <div className="flex aspect-[3/4] flex-col items-center justify-center gap-1 bg-ink/5 p-2 text-center">
+                      <p className="text-[11px] font-semibold text-rani-deep">
+                        Couldn&apos;t generate
+                      </p>
+                      <p className="text-[10px] text-ink/50">
+                        {job.error || job.message}
+                      </p>
+                    </div>
+                  )}
+
+                  {(job.status === "completed" || job.status === "failed") && (
+                    <button
+                      onClick={() => retryPose(job.job_id)}
+                      disabled={isRetrying}
+                      aria-label="Retry this pose"
+                      className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-ink/70 text-parchment shadow-sm transition hover:bg-ink/90 disabled:opacity-50"
+                    >
+                      {isRetrying ? (
+                        <span className="block h-3 w-3 animate-spin rounded-full border-2 border-parchment border-t-transparent" />
+                      ) : (
+                        <span className="text-sm leading-none">↻</span>
+                      )}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
+
+          {lightboxJob && (
+            <ImageLightbox
+              src={jobResultUrl(lightboxJob)}
+              alt="Try-on result"
+              onClose={() => setLightboxJob(null)}
+            />
+          )}
 
           <button
             onClick={reset}
