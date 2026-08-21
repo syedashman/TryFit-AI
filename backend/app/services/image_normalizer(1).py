@@ -3,10 +3,30 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 
 
 SUPPORTED_OUTPUT_FORMATS = {"PNG", "JPEG"}
+
+# Photos below this on their shorter side are upscaled (with a mild sharpen
+# pass) before being sent to the try-on provider. This keeps borderline-low
+# -resolution photos usable without rejecting them outright, and avoids the
+# soft/blurry-looking results that a small source image can produce.
+_MIN_COMFORTABLE_SHORT_SIDE = 600
+_MAX_UPSCALE_SHORT_SIDE = 1200
+
+
+def _upscale_if_small(image: Image.Image) -> Image.Image:
+    short_side = min(image.size)
+    if short_side >= _MIN_COMFORTABLE_SHORT_SIDE:
+        return image
+
+    target_short_side = min(_MIN_COMFORTABLE_SHORT_SIDE, _MAX_UPSCALE_SHORT_SIDE)
+    scale = target_short_side / short_side
+    new_size = (round(image.width * scale), round(image.height * scale))
+    upscaled = image.resize(new_size, Image.LANCZOS)
+    # Upscaling softens edges; a light unsharp mask restores perceived detail.
+    return upscaled.filter(ImageFilter.UnsharpMask(radius=1.4, percent=110, threshold=2))
 
 
 def normalize_for_provider(
@@ -71,6 +91,7 @@ def normalize_for_provider(
             image = ImageOps.exif_transpose(
                 opened_image
             )
+            image = _upscale_if_small(image)
 
             if normalized_format == "JPEG":
                 normalized_image = (

@@ -210,49 +210,7 @@ def process_job(
             settings
         )
 
-        geometry_reference = (
-            _safe_geometry_reference(
-                record
-            )
-        )
-
-        if record.cloth_type in {
-            "overall",
-            "lower",
-        }:
-            render_person = geometry_reference
-        else:
-            render_person = Path(
-                record.person_file
-            )
-
-        target_pose = (record.provider_metadata or {}).get("target_pose")
-        if target_pose:
-            try:
-                category = (record.provider_metadata or {}).get("catalog_category", "person")
-                subject_description = {
-                    "men": "an adult man with masculine facial features and a masculine hairstyle — the output must clearly read as male, not androgynous or female",
-                    "women": "an adult woman with feminine facial features and long or clearly feminine hair — the output must clearly read as female, not androgynous or male",
-                    "kids": "a child",
-                }.get(category, "a person")
-                from app.services.pose_customization import generate_posed_reference
-
-                posed_path = generate_posed_reference(
-                    settings,
-                    identity_paths=[Path(p) for p in record.person_files] or [render_person],
-                    pose_name=target_pose,
-                    subject_description=subject_description,
-                    output_dir=Path(settings.storage_dir) / "pose_cache",
-                )
-                render_person = posed_path
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Pose normalization to '%s' failed for job %s, "
-                    "falling back to the shopper's original photo: %s",
-                    target_pose,
-                    job_id,
-                    exc,
-                )
+        render_person = Path(record.person_file)
 
         person_files = [
             Path(item)
@@ -278,7 +236,7 @@ def process_job(
             seed=seed,
             person_images=person_files,
             geometry_reference_image=(
-                geometry_reference
+                render_person
             ),
             geometry_profile=(
                 record.geometry_profile
@@ -288,27 +246,61 @@ def process_job(
             ),
         )
 
+        # SAME-PHOTO quality retry (Phase 3C.2).
+        #
+        # Both generation rounds use the EXACT SAME assigned render_person and
+        # the same garment. We never switch to another uploaded photo, never
+        # index into person_files[n], and never fall back to an alternate
+        # person. Only genuine quality failures (a distorted body or a garment
+        # fidelity failure) are retried; safety blocks, auth/config errors and
+        # invalid inputs are raised immediately without a second attempt.
         retry_history: list[dict[str, Any]] = []
         result = None
-        person_candidates = [render_person] + [
-            path for path in person_files if path != render_person
-        ]
-        max_attempts = max(1, min(
-            len(person_candidates),
-            1 + int(settings.phase3c2_alternate_person_retries),
-        ))
+
+        # Hard cap of 2 Vertex generation rounds for a single job.
+        max_attempts = max(
+            1,
+            min(
+                2,
+                int(
+                    settings
+                    .commercial_max_generation_rounds
+                ),
+            ),
+        )
+
+        # Only these provider error codes justify a same-photo retry.
+        RETRYABLE_QUALITY_CODES = {
+            "distorted_tryon_result",
+            "garment_fidelity_failed",
+        }
 
         for attempt_index in range(max_attempts):
-            attempt_person = person_candidates[attempt_index]
-            request.person_image = attempt_person
+            # Same photo every round. render_person is the assigned photo and
+            # is never reassigned inside this loop.
+            request.person_image = render_person
             if record.cloth_type in {"overall", "lower"}:
-                request.geometry_reference_image = attempt_person
+                request.geometry_reference_image = render_person
             request.seed = seed + attempt_index * 97
+
+            logger.info(
+                "VTON ROUND %s/%s",
+                attempt_index + 1,
+                max_attempts,
+            )
+            logger.info(
+                "PERSON USED: %s",
+                render_person,
+            )
+            print(f"VTON ROUND {attempt_index + 1}/{max_attempts}")
+            print(f"PERSON USED: {render_person}")
+
             try:
                 result = provider.generate(request)
                 retry_history.append({
                     "attempt": attempt_index + 1,
-                    "person_file": str(attempt_person),
+                    "round": attempt_index + 1,
+                    "person_file": str(render_person),
                     "seed": request.seed,
                     "status": "provider_completed",
                 })
@@ -316,17 +308,25 @@ def process_job(
             except ProviderError as attempt_error:
                 retry_history.append({
                     "attempt": attempt_index + 1,
-                    "person_file": str(attempt_person),
+                    "round": attempt_index + 1,
+                    "person_file": str(render_person),
                     "seed": request.seed,
                     "status": "failed",
                     "error_code": attempt_error.code,
                     "error": str(attempt_error),
                 })
-                retryable_distortion = (
-                    settings.phase3c2_retry_distorted_results
-                    and attempt_error.code == "distorted_tryon_result"
+
+                # Retry only genuine quality failures, and only while another
+                # round remains. Safety blocks, auth/config errors and invalid
+                # inputs are never retried.
+                is_retryable_quality = (
+                    attempt_error.code
+                    in RETRYABLE_QUALITY_CODES
                 )
-                if not retryable_distortion or attempt_index >= max_attempts - 1:
+                if (
+                    not is_retryable_quality
+                    or attempt_index >= max_attempts - 1
+                ):
                     raise
 
         if result is None:

@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { assetUrl, CatalogProduct, fetchCatalog } from "@/lib/api";
-import TryOnDrawer from "./TryOnDrawer";
+import WishlistButton from "@/components/WishlistButton";
+
+const SUPPORTED_CATEGORIES = ["men", "women"];
 
 export default function ProductDetail({
   category,
@@ -12,34 +15,53 @@ export default function ProductDetail({
   category: string;
   productNumber: string;
 }) {
-  const [product, setProduct] = useState<CatalogProduct | null | undefined>(
-    undefined
-  );
+  const router = useRouter();
+  const [product, setProduct] = useState<CatalogProduct | null | undefined>(undefined);
   const [colorIndex, setColorIndex] = useState(0);
   const [imageIndex, setImageIndex] = useState(0);
-  const [favourited, setFavourited] = useState(false);
   const [added, setAdded] = useState(false);
-  const [tryFitOpen, setTryFitOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(true);
+
+  const categoryKey = category.toLowerCase();
+  const supported = SUPPORTED_CATEGORIES.includes(categoryKey);
 
   useEffect(() => {
+    if (!supported) {
+      setProduct(null);
+      return;
+    }
     fetchCatalog()
       .then((data) => {
-        const list =
-          data.categories[category as "men" | "women" | "kids"] || [];
+        const list = data.categories[categoryKey as "men" | "women"] || [];
         const match = list.find((p) => p.product_number === productNumber);
         setProduct(match || null);
       })
       .catch(() => setProduct(null));
-  }, [category, productNumber]);
+  }, [categoryKey, productNumber, supported]);
+
+  const color = product?.colors[colorIndex] || product?.colors[0] || null;
+  const activeImage = color?.assets[imageIndex] || product?.thumbnail || null;
+
+  const pricing = useMemo(() => {
+    if (!product) return "$0";
+    const digits = product.product_number.replace(/\D/g, "");
+    const price = digits ? Number(digits) : 195;
+    return `$${price}`;
+  }, [product]);
+
+  function openTryFit() {
+    const colorSlug = encodeURIComponent(color?.name || "Default");
+    router.push(`/product/${categoryKey}/${productNumber}/try-fit?color=${colorSlug}`);
+  }
 
   if (product === undefined) {
     return (
-      <div className="mx-auto max-w-6xl px-6 py-16">
+      <div className="mx-auto max-w-[1280px] px-4 py-16 sm:px-6 lg:px-8">
         <div className="grid gap-10 md:grid-cols-2">
-          <div className="aspect-[3/4] animate-pulse rounded-md bg-ink/5" />
+          <div className="aspect-[3/4] animate-pulse bg-[rgba(17,17,17,0.05)]" />
           <div className="space-y-4">
-            <div className="h-8 w-2/3 animate-pulse rounded bg-ink/5" />
-            <div className="h-4 w-1/3 animate-pulse rounded bg-ink/5" />
+            <div className="h-9 w-2/3 animate-pulse bg-[rgba(17,17,17,0.05)]" />
+            <div className="h-5 w-1/3 animate-pulse bg-[rgba(17,17,17,0.05)]" />
           </div>
         </div>
       </div>
@@ -48,147 +70,103 @@ export default function ProductDetail({
 
   if (!product) {
     return (
-      <div className="mx-auto max-w-6xl px-6 py-24 text-center">
-        <p className="font-display text-2xl">Product not found</p>
-        <p className="mt-2 text-ink/50">
-          It may have been removed from the demo catalog.
+      <div className="mx-auto max-w-[1280px] px-4 py-24 text-center sm:px-6 lg:px-8">
+        <p className="font-display text-4xl tracking-[-0.06em] text-[var(--tryfit-ink)]">
+          {supported ? "Product not found" : "This collection isn't available"}
         </p>
+        <p className="mt-3 text-[var(--tryfit-muted)]">
+          {supported ? "This product is unavailable in the active catalog." : "Explore our Men and Women collections instead."}
+        </p>
+        <div className="mt-8 flex justify-center gap-3">
+          <button onClick={() => router.push("/?category=women")} className="border border-[var(--tryfit-ink)] bg-[var(--tryfit-ink)] px-6 py-3 text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[#f7f5f2]">Shop Women</button>
+          <button onClick={() => router.push("/?category=men")} className="border border-[rgba(17,17,17,0.2)] px-6 py-3 text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--tryfit-ink)]">Shop Men</button>
+        </div>
       </div>
     );
   }
 
-  const color = product.colors[colorIndex] || product.colors[0];
-  const activeImage = color?.assets[imageIndex] || product.thumbnail;
-
-  function openTryFit() {
-    setTryFitOpen(true);
-  }
-
   return (
-    <div className="mx-auto max-w-6xl px-6 py-14">
-      <div className="grid gap-12 md:grid-cols-2">
+    <div className="mx-auto max-w-[1280px] px-4 pb-16 pt-8 sm:px-6 lg:px-8">
+      <div className="grid gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:gap-12">
         <div>
-          <div className="relative aspect-[3/4] overflow-hidden rounded-md bg-white/40">
-            {activeImage && (
-              <Image
-                src={assetUrl(activeImage)}
-                alt={product.name}
-                fill
-                sizes="(max-width: 768px) 100vw, 50vw"
-                className="object-cover"
-                priority
-              />
-            )}
+          <div className="relative overflow-hidden border border-[rgba(17,17,17,0.08)] bg-[#f8f7f4]">
+            <div className="relative aspect-[4/5] overflow-hidden">
+              {activeImage ? (
+                <Image src={assetUrl(activeImage)} alt={product.name} fill className="object-cover" priority sizes="(max-width: 1024px) 100vw, 60vw" />
+              ) : (
+                <div className="flex h-full items-center justify-center text-[rgba(17,17,17,0.35)]">No image</div>
+              )}
+            </div>
+            <WishlistButton product={product} className="absolute right-4 top-4" />
           </div>
+
           {color && color.assets.length > 1 && (
-            <div className="mt-4 flex gap-3 overflow-x-auto">
+            <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
               {color.assets.map((asset, idx) => (
-                <button
-                  key={asset}
-                  onClick={() => setImageIndex(idx)}
-                  className={`relative h-20 w-16 shrink-0 overflow-hidden rounded border ${
-                    idx === imageIndex
-                      ? "border-emerald-deep"
-                      : "border-ink/10"
-                  }`}
-                >
-                  <Image
-                    src={assetUrl(asset)}
-                    alt=""
-                    fill
-                    sizes="64px"
-                    className="object-cover"
-                  />
+                <button key={asset} onClick={() => setImageIndex(idx)} className={`relative aspect-[4/5] overflow-hidden border ${idx === imageIndex ? "border-[var(--tryfit-ink)]" : "border-[rgba(17,17,17,0.1)]"}`}>
+                  <Image src={assetUrl(asset)} alt="" fill className="object-cover" sizes="160px" />
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-ink/45">
-            {product.category}
-          </p>
-          <h1 className="mt-2 font-display text-3xl text-ink">
+        <div className="pt-4">
+          <div className="text-[0.7rem] uppercase tracking-[0.2em] text-[rgba(17,17,17,0.55)]">
+            {product.category} / {product.product_number}
+          </div>
+          <h1 className="mt-3 font-display text-[3.2rem] leading-[0.9] tracking-[-0.06em] text-[var(--tryfit-ink)]">
             {product.name}
           </h1>
-          <p className="mt-2 text-sm text-ink/50">
-            Product #{product.product_number} &middot; {product.image_count}{" "}
-            images
-          </p>
+          <div className="mt-4 flex items-center justify-between gap-4 border-b border-[rgba(17,17,17,0.12)] pb-4">
+            <div className="text-[1.1rem] text-[var(--tryfit-ink)]">{pricing}</div>
+            <div className="text-[0.7rem] uppercase tracking-[0.18em] text-[rgba(17,17,17,0.55)]">{product.color_count} Color{product.color_count === 1 ? "" : "s"}</div>
+          </div>
 
           {product.colors.length > 1 && (
-            <div className="mt-8">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/60">
-                Colour — {color?.name}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-6">
+              <div className="text-[0.7rem] uppercase tracking-[0.2em] text-[rgba(17,17,17,0.55)]">Colour</div>
+              <div className="mt-3 flex flex-wrap gap-3">
                 {product.colors.map((c, idx) => (
-                  <button
-                    key={c.name}
-                    onClick={() => {
-                      setColorIndex(idx);
-                      setImageIndex(0);
-                    }}
-                    className={`rounded-full border px-4 py-1.5 text-sm transition ${
-                      idx === colorIndex
-                        ? "border-emerald-deep bg-emerald-deep text-parchment"
-                        : "border-ink/15 text-ink/70 hover:border-emerald-deep/40"
-                    }`}
-                  >
-                    {c.name}
-                  </button>
+                  <button key={c.name} onClick={() => { setColorIndex(idx); setImageIndex(0); }} className={`h-8 w-8 rounded-full border ${idx === colorIndex ? "border-[var(--tryfit-ink)] ring-2 ring-[rgba(17,17,17,0.12)]" : "border-[rgba(17,17,17,0.2)]"}`} title={c.name} style={{ background: idx % 2 === 0 ? "#d7d0ca" : "#1c1c1c" }} />
                 ))}
               </div>
             </div>
           )}
 
-          <div className="mt-10 space-y-3">
-            <button
-              onClick={openTryFit}
-              className="fabric-shimmer flex w-full items-center justify-center gap-2 rounded-md bg-gradient-to-r from-gold-muted via-gold to-gold-light px-6 py-4 font-display text-lg font-semibold text-emerald-deep shadow-sm transition hover:brightness-105"
-            >
-              ✨ Try Fit Now
-            </button>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setAdded(true)}
-                className="flex-1 rounded-md border border-emerald-deep bg-emerald-deep px-6 py-3 text-sm font-semibold uppercase tracking-[0.1em] text-parchment transition hover:bg-emerald-soft"
-              >
-                {added ? "Added ✓" : "Add to Cart"}
-              </button>
-              <button
-                onClick={() => setFavourited((v) => !v)}
-                className={`flex-1 rounded-md border px-6 py-3 text-sm font-semibold uppercase tracking-[0.1em] transition ${
-                  favourited
-                    ? "border-rani bg-rani/10 text-rani-deep"
-                    : "border-ink/15 text-ink/70 hover:border-rani/40"
-                }`}
-              >
-                {favourited ? "Favourited ♥" : "Add to Favourite"}
-              </button>
+          <div className="mt-8">
+            <div className="text-[0.7rem] uppercase tracking-[0.2em] text-[rgba(17,17,17,0.55)]">Size</div>
+            <div className="mt-3 grid grid-cols-4 gap-3">
+              {['XS', 'S', 'M', 'L'].map((size) => (
+                <button key={size} className={`border px-4 py-3 text-[0.7rem] uppercase tracking-[0.18em] ${size === 'S' ? 'border-[var(--tryfit-ink)] bg-[var(--tryfit-ink)] text-[#f7f5f2]' : 'border-[rgba(17,17,17,0.15)] bg-transparent text-[var(--tryfit-ink)]'}`}>
+                  {size}
+                </button>
+              ))}
             </div>
           </div>
 
-          <p className="mt-6 text-xs leading-relaxed text-ink/45">
-            Try Fit Now opens right here — upload or capture 3–5 clear
-            photos of yourself and TryFit AI will generate a realistic
-            preview of this outfit on you, same face, same body, this
-            product.
-          </p>
+          <div className="mt-8 grid gap-3 sm:grid-cols-2">
+            <button onClick={() => setAdded(true)} className="border border-[var(--tryfit-ink)] bg-[var(--tryfit-ink)] px-6 py-4 text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[#f7f5f2] transition hover:bg-[var(--tryfit-olive)]">
+              {added ? "Added ✓" : "Add to Bag"}
+            </button>
+            <button onClick={openTryFit} className="border border-[rgba(17,17,17,0.18)] bg-transparent px-6 py-4 text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--tryfit-ink)] transition hover:border-[var(--tryfit-ink)]">
+              Try Fit Now
+            </button>
+          </div>
+
+          <div className="mt-8 border-t border-[rgba(17,17,17,0.12)] pt-4">
+            <button onClick={() => setDetailsOpen((v) => !v)} className="flex w-full items-center justify-between text-left text-[0.7rem] uppercase tracking-[0.2em] text-[rgba(17,17,17,0.7)]">
+              <span>Details</span>
+              <span>{detailsOpen ? '−' : '+'}</span>
+            </button>
+            {detailsOpen && (
+              <p className="mt-4 text-sm leading-relaxed text-[rgba(17,17,17,0.7)]">
+                Crafted from premium materials for everyday wear. This selected piece is pulled directly from the existing TryFitAI catalog and is designed to be tried on using the same real-generation workflow.
+              </p>
+            )}
+          </div>
         </div>
       </div>
-
-      {color && (
-        <TryOnDrawer
-          open={tryFitOpen}
-          onClose={() => setTryFitOpen(false)}
-          category={category}
-          productNumber={productNumber}
-          colorName={color.name}
-        />
-      )}
     </div>
   );
 }

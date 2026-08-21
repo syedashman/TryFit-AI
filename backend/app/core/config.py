@@ -37,8 +37,8 @@ class Settings(BaseSettings):
 
     min_person_images: int = 3
     max_person_images: int = 5
-    person_min_width: int = 400
-    person_min_height: int = 500
+    person_min_width: int = 300
+    person_min_height: int = 375
     person_min_sharpness: float = 35.0
     identity_consistency_threshold: float = 0.80
     identity_hard_reject_threshold: float = 0.55
@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     provider_circuit_cooldown_seconds: float = 30.0
     provider_health_cache_ttl_seconds: float = 15.0
 
+    # Bounded concurrency for independent uploaded-photo jobs. Keeps one batch
+    # responsive without hitting provider rate limits or memory spikes.
+    max_concurrent_jobs: int = 2
+
     hf_space: str = "zhengchong/CatVTON"
     hf_api_name: str = "/submit_function"
     hf_fallback_api_name: str | None = (
@@ -70,6 +74,13 @@ class Settings(BaseSettings):
     hf_cloth_type: str = "overall"
     hf_show_type: str = "result only"
     hf_num_inference_steps: int = 50
+
+    # Which backend generate_posed_reference() uses for the side/back pose
+    # step: "gemini" (default, uses gemini-2.5-flash-image) or "instantid"
+    # (free HF Space, InsightFace-based — non-commercial research license,
+    # fine for demos, revisit before commercial launch).
+    pose_provider: str = "gemini"
+    instantid_space: str = "InstantX/InstantID"
     hf_guidance_scale: float = 2.5
     hf_seed: int = 42
     hf_enable_fallback: bool = True
@@ -108,6 +119,7 @@ class Settings(BaseSettings):
     @field_validator(
         "provider_runtime_max_retries",
         "provider_failure_threshold",
+        "max_concurrent_jobs",
     )
     @classmethod
     def validate_non_negative_runtime_integers(
@@ -116,6 +128,13 @@ class Settings(BaseSettings):
     ) -> int:
         if value < 0:
             raise ValueError("Provider runtime integer settings cannot be negative.")
+        return value
+
+    @field_validator("max_concurrent_jobs")
+    @classmethod
+    def validate_max_concurrent_jobs(cls, value: int) -> int:
+        if not 1 <= value <= 3:
+            raise ValueError("max_concurrent_jobs must be between 1 and 3.")
         return value
 
     @field_validator(

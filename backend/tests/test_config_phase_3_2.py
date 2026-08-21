@@ -20,3 +20,9 @@ def test_vertex_sample_count_range():
 def test_auto_provider_is_allowed():
     settings = Settings(_env_file=None, vton_provider="auto")
     assert settings.vton_provider == "auto"
+
+
+def test_max_concurrent_jobs_has_safe_default():
+    settings = Settings(_env_file=None)
+    assert settings.max_concurrent_jobs == 2
+    assert 1 <= settings.max_concurrent_jobs <= 3

@@ -291,10 +291,11 @@ class VertexTryOnProvider(VTONProvider):
         ):
             return ProviderError(
                 (
-                    "Vertex blocked person editing under its safety policy. "
-                    "The request already asks for adult-person generation. "
-                    "Confirm that the source image contains an adult and retry. "
-                    f"Remote detail: {detail_text}"
+                    "This photo couldn't be processed because Google's safety "
+                    "system flagged it (this can happen with blurry, filtered, "
+                    "or unusual-looking selfies). Please try a different, clear "
+                    "photo for this slot. "
+                    f"Technical detail: {detail_text}"
                 ),
                 code="vertex_person_generation_blocked",
                 provider="vertex",
@@ -488,7 +489,42 @@ class VertexTryOnProvider(VTONProvider):
                     )
                 ) as client:
                     
-                    print("VERTEX PARAMETERS SENT:", payload.get("parameters"))
+                    # Safe payload logging: structure and sizes only — never
+                    # the base64 image bytes or the bearer token. This lets a
+                    # request be triaged from logs without leaking credentials
+                    # or huge blobs.
+                    instances = payload.get("instances", [])
+                    instance_shape = []
+                    for inst in instances:
+                        person_b64 = (
+                            inst.get("personImage", {})
+                            .get("image", {})
+                            .get("bytesBase64Encoded", "")
+                        )
+                        products = inst.get("productImages", [])
+                        product_sizes = [
+                            len(
+                                p.get("image", {}).get(
+                                    "bytesBase64Encoded", ""
+                                )
+                            )
+                            for p in products
+                        ]
+                        instance_shape.append(
+                            {
+                                "personImage_b64_len": len(person_b64),
+                                "productImages_count": len(products),
+                                "productImage_b64_lens": product_sizes,
+                            }
+                        )
+                    print(
+                        "VERTEX PAYLOAD SHAPE:",
+                        {
+                            "top_level_keys": sorted(payload.keys()),
+                            "instances": instance_shape,
+                            "parameters": payload.get("parameters"),
+                        },
+                    )
                     response = client.post(
                         self.predict_url,
                         headers={
@@ -639,6 +675,7 @@ class VertexTryOnProvider(VTONProvider):
                     candidate_paths,
                     render_reference_profile,
                     full_body_reference_profile,
+                    garment_reference_path=request.garment_image,
                 )
             )
 
@@ -646,6 +683,45 @@ class VertexTryOnProvider(VTONProvider):
                 item.to_dict()
                 for item in scores
             ]
+
+            # Per-candidate diagnostic logging. This is intentionally verbose
+            # so a rejected batch can be triaged from logs alone.
+            print("PERSON USED:", str(person))
+            for s in scores:
+                print(
+                    "CANDIDATE",
+                    {
+                        "index": s.index,
+                        "geometry": round(
+                            s.geometry_similarity, 3
+                        ),
+                        "full_body": round(
+                            s.full_body_similarity, 3
+                        ),
+                        "color": round(
+                            s.garment_color_score, 3
+                        ),
+                        "structure": round(
+                            s.garment_structure_score, 3
+                        ),
+                        "length": round(
+                            s.garment_length_score, 3
+                        ),
+                        "long_violation":
+                            s.long_garment_violation,
+                        "long_garment_confidence":
+                            s.long_garment_confidence,
+                        "final": s.final_score,
+                        "hard_rejected": s.hard_rejected,
+                        "rejection_reasons": list(
+                            s.rejection_reasons or []
+                        ),
+                    },
+                )
+            print(
+                "CHOSEN CANDIDATE:",
+                Path(chosen_path).name,
+            )
 
         else:
             candidate_profile = (
@@ -730,6 +806,53 @@ class VertexTryOnProvider(VTONProvider):
                 )
             )
         ):
+            # Distinguish the dominant failure class so the caller can decide
+            # whether a same-photo generation retry is worthwhile. Garment
+            # fidelity failures (wrong color/structure/length, or a long
+            # garment rendered short) are reported as garment_fidelity_failed;
+            # body geometry distortion is reported as distorted_tryon_result.
+            selected_reasons = list(
+                selected_score.get(
+                    "rejection_reasons"
+                )
+                or []
+            )
+
+            garment_reasons = {
+                "garment_color_mismatch",
+                "garment_structure_mismatch",
+                "garment_length_mismatch",
+                "long_garment_shortened",
+            }
+
+            has_garment_failure = any(
+                reason in garment_reasons
+                for reason in selected_reasons
+            )
+            has_geometry_failure = (
+                "geometry_distortion"
+                in selected_reasons
+            )
+
+            if (
+                has_garment_failure
+                and not has_geometry_failure
+            ):
+                raise ProviderError(
+                    "Vertex could not preserve the "
+                    "garment's color, structure, or "
+                    "length on any candidate. The "
+                    "generated try-on does not match "
+                    "the reference outfit.",
+                    code="garment_fidelity_failed",
+                    provider="vertex",
+                    retryable=True,
+                    details={
+                        "rejection_reasons":
+                            selected_reasons,
+                    },
+                )
+
             raise ProviderError(
                 "Vertex generated only "
                 "body-distorted candidates. "
@@ -738,6 +861,12 @@ class VertexTryOnProvider(VTONProvider):
                 "complete person, including "
                 "feet, is visible.",
                 code="distorted_tryon_result",
+                provider="vertex",
+                retryable=True,
+                details={
+                    "rejection_reasons":
+                        selected_reasons,
+                },
             )
 
         return TryOnResult(

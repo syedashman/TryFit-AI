@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -19,6 +21,32 @@ from app.services.storage import list_jobs, load_job, save_job, save_upload
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 QualityPreset = Literal["fast", "balanced", "high"]
+
+
+async def _schedule_job_with_limit(
+    job_id: str,
+    settings,
+    *,
+    num_inference_steps: int,
+    guidance_scale: float,
+    seed: int,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    async with semaphore:
+        started_at = time.perf_counter()
+        print(f"[PERF] Batch job queue start: job_id={job_id}")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            process_job,
+            job_id,
+            settings,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            seed=seed,
+        )
+        elapsed = time.perf_counter() - started_at
+        print(f"[PERF] Batch job complete: job_id={job_id} elapsed={elapsed:.2f}s")
 
 
 def _catalog_root() -> Path:
@@ -174,50 +202,40 @@ async def generate_catalog_tryon(
     person_geometry_profiles = [build_body_geometry_profile(path) for path in person_paths]
     geometry_profile = person_geometry_profiles[geometry_index]
 
-    selected_framing = str(report.images[geometry_index].framing) if geometry_index < len(report.images) else "unknown"
-    if selected_framing not in {"full_body", "three_quarter"}:
-        for path in person_paths:
-            path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "full_body_photo_required",
-                "message": "Please include at least one full-body photo (head to feet, standing) so we can generate a full-body result, matching how the product is shown.",
-            },
-        )
-
     best_matched_person_index = geometry_index
-    best_pose_match_score = 1.0
     primary_garment_path = garment_paths[0]
-    target_poses = ["front", "side", "back"]
+    relative = primary_garment_path.relative_to(product_dir)
+    color_name = relative.parts[0] if len(relative.parts) > 1 else "Default"
+    analysis = analyze_garment(primary_garment_path, garment_description, cloth_type)
+    base_seed = parsed_seed if parsed_seed is not None else settings.hf_seed
 
     batch_id = uuid4().hex
     jobs: list[JobRecord] = []
-    for index, target_pose in enumerate(target_poses, start=1):
-        garment_path = primary_garment_path
-        relative = garment_path.relative_to(product_dir)
-        color_name = relative.parts[0] if len(relative.parts) > 1 else "Default"
-        analysis = analyze_garment(garment_path, garment_description, cloth_type)
-        matched_person_index = best_matched_person_index
-        pose_match_score = best_pose_match_score
+    semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
+    batch_started = time.perf_counter()
+    print(
+        f"[PERF] Batch {batch_id} queued: total_jobs={len(person_paths)} concurrency={settings.max_concurrent_jobs}"
+    )
+    for index, person_path in enumerate(person_paths, start=1):
         job_id = uuid4().hex
         record = JobRecord(
             job_id=job_id,
             provider=settings.vton_provider,
-            message=f"Queued {index} of {len(target_poses)} ({target_pose} pose).",
-            person_file=str(person_paths[matched_person_index]),
+            message=f"Queued {index} of {len(person_paths)}.",
+            person_file=str(person_path),
             person_files=[str(path) for path in person_paths],
             selected_person_index=report.selected_index,
             validation_report=validation_data,
-            geometry_profile=geometry_profile.to_dict(),
-            geometry_reference_index=geometry_index,
-            garment_file=str(garment_path),
+            geometry_profile=person_geometry_profiles[index - 1].to_dict(),
+            geometry_reference_index=index - 1,
+            garment_file=str(primary_garment_path),
             garment_description=(
                 f"{garment_description}; category {category_name}; selected color {color_name}. "
                 "Preserve the complete product identity exactly: all garment pieces, silhouette, length, neckline, "
                 "collar, sleeves, cuffs, closures, embroidery, print, texture, fabric, trim, matching bottoms and layers. "
                 "Never reinterpret a complete outfit as an upper-only shirt and never remove a product component. "
-                f"Use catalog composition reference {garment_path.stem} and the closest compatible uploaded person framing."
+                "Keep the shopper's own uploaded pose, framing, and camera angle exactly as-is — only replace their "
+                f"clothing with this product. Use catalog composition reference {primary_garment_path.stem}."
             ),
             cloth_type=cloth_type,
             show_type="result only",
@@ -227,42 +245,45 @@ async def generate_catalog_tryon(
             request_parameters={
                 "num_inference_steps": parsed_steps if parsed_steps is not None else preset["num_inference_steps"],
                 "guidance_scale": parsed_guidance if parsed_guidance is not None else preset["guidance_scale"],
-                "seed": (parsed_seed if parsed_seed is not None else settings.hf_seed) + index - 1,
+                "seed": base_seed + index - 1,
             },
             provider_metadata={
                 "batch_id": batch_id,
                 "catalog_category": category_name,
                 "catalog_product": product_number,
                 "catalog_color": color_name,
-                "catalog_pose": garment_path.stem,
+                "catalog_pose": primary_garment_path.stem,
                 "catalog_reference": f"/static/catalog/{category_name}/{product_number}/{relative.as_posix()}",
                 "batch_index": index,
-                "batch_total": len(target_poses),
-                "target_pose": target_pose,
+                "batch_total": len(person_paths),
+                "person_source_index": index - 1,
+                "person_source_framing": str(report.images[index - 1].framing) if index - 1 < len(report.images) else "unknown",
+                "pose_source_strategy": "match_uploaded_photo_pose",
                 "age_neutral_validation": True,
-                "pose_source_strategy": "fixed_three_pose_customization",
-                "person_source_index": matched_person_index,
-                "pose_match_score": round(float(pose_match_score), 4),
                 "product_integrity_lock": True,
                 "selected_color_only": True,
             },
         )
         save_job(record, settings)
         jobs.append(record)
-        background_tasks.add_task(
-            process_job,
-            job_id,
-            settings,
-            num_inference_steps=record.request_parameters["num_inference_steps"],
-            guidance_scale=record.request_parameters["guidance_scale"],
-            seed=record.request_parameters["seed"],
+        asyncio.create_task(
+            _schedule_job_with_limit(
+                job_id,
+                settings,
+                num_inference_steps=record.request_parameters["num_inference_steps"],
+                guidance_scale=record.request_parameters["guidance_scale"],
+                seed=record.request_parameters["seed"],
+                semaphore=semaphore,
+            )
         )
 
+    batch_elapsed = time.perf_counter() - batch_started
+    print(f"[PERF] Batch {batch_id} scheduling complete: elapsed={batch_elapsed:.2f}s")
     return {
         "batch_id": batch_id,
         "expected_outputs": len(jobs),
         "jobs": [job.model_dump() for job in jobs],
-        "message": f"{len(jobs)} Try Fit images queued for the selected color.",
+        "message": f"{len(jobs)} Try Fit images queued, one per uploaded photo.",
     }
 
 
