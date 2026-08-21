@@ -56,6 +56,36 @@ export function useTryFit({
     }
   }, []);
 
+  const startBatchPolling = useCallback(
+    (batchId: string) => {
+      clearPoll();
+      setStage("processing");
+
+      const tick = async () => {
+        try {
+          console.log("[RETRY:UI] polling batch", batchId);
+          const status = await fetchBatchStatus(batchId);
+          setBatch(status);
+          if (status.all_finished) {
+            clearPoll();
+            setStage("done");
+            return;
+          }
+        } catch (err) {
+          console.error("[RETRY:UI] batch poll failed", err);
+          clearPoll();
+          setStage("error");
+        }
+      };
+
+      void tick();
+      pollRef.current = setInterval(() => {
+        void tick();
+      }, POLL_INTERVAL_MS);
+    },
+    [clearPoll]
+  );
+
   // Recover a previous batch for this exact product/color within the session.
   useEffect(() => {
     let cancelled = false;
@@ -161,96 +191,118 @@ export function useTryFit({
         personImages: files,
       });
       rememberBatch(storageKey, res.batch_id);
-      setStage("processing");
-      clearPoll();
-      pollRef.current = setInterval(async () => {
-        try {
-          const status = await fetchBatchStatus(res.batch_id);
-          setBatch(status);
-          if (status.all_finished) {
-            clearPoll();
-            setStage("done");
-          }
-        } catch (err) {
-          clearPoll();
-          setStage("error");
-          // Raw reason stays in the console for debugging only.
-          console.error("Batch polling failed:", err);
-          setErrorMessage("connection");
-        }
-      }, POLL_INTERVAL_MS);
+      startBatchPolling(res.batch_id);
     } catch (err) {
       setStage("error");
       console.error("Generation request failed:", err);
       setErrorMessage(err instanceof Error ? err.message : "start");
     }
-  }, [category, productNumber, colorName, files, storageKey, clearPoll]);
+  }, [category, productNumber, colorName, files, startBatchPolling, storageKey]);
 
-  const retryPose = useCallback(async (oldJobId: string) => {
-    setRetryingIds((prev) => new Set(prev).add(oldJobId));
-    try {
-      const res = await retryJob(oldJobId);
-      const newId = res.job_id;
-      setBatch((prev) =>
-        prev
-          ? {
-              ...prev,
-              jobs: prev.jobs.map((j) =>
-                j.job_id === oldJobId
-                  ? {
-                      ...j,
-                      job_id: newId,
-                      status: "processing",
-                      message: "Reworking this look…",
-                      error: null,
-                      error_code: null,
-                    }
-                  : j
-              ),
-            }
-          : prev
-      );
-      setRetryingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(oldJobId);
-        next.add(newId);
-        return next;
-      });
+  const retryPose = useCallback(
+    async (oldJobId: string) => {
+      if (retryingIds.has(oldJobId)) return;
 
-      for (let attempt = 0; attempt < MAX_RETRY_POLLS; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-        const status = await fetchJobStatus(newId);
-        if (status.status === "completed" || status.status === "failed") {
-          setBatch((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  jobs: prev.jobs.map((j) => (j.job_id === newId ? status : j)),
-                }
-              : prev
-          );
-          setRetryingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(newId);
-            return next;
-          });
-          return;
+      console.log("[RETRY:UI] click job=", oldJobId);
+      setRetryingIds((prev) => new Set(prev).add(oldJobId));
+
+      try {
+        console.log("[RETRY:UI] POST start job=", oldJobId);
+        const res = await retryJob(oldJobId);
+        const newId = res.job_id;
+        console.log("[RETRY:UI] POST success newJob=", newId);
+
+        setBatch((prev) =>
+          prev
+            ? {
+                ...prev,
+                jobs: prev.jobs.map((j) =>
+                  j.job_id === oldJobId
+                    ? {
+                        ...j,
+                        job_id: newId,
+                        status: "processing",
+                        message: "Reworking this look…",
+                        result_url: null,
+                        error: null,
+                        error_code: null,
+                      }
+                    : j
+                ),
+              }
+            : prev
+        );
+
+        setRetryingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(oldJobId);
+          next.add(newId);
+          return next;
+        });
+
+        const currentBatchId = batch?.batch_id;
+        if (currentBatchId) {
+          console.log("[RETRY:UI] polling resumed batch=", currentBatchId);
+          startBatchPolling(currentBatchId);
         }
+
+        for (let attempt = 0; attempt < MAX_RETRY_POLLS; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+          const status = await fetchJobStatus(newId);
+          console.log("[RETRY:UI] job status=", newId, status.status);
+
+          if (status.status === "completed" || status.status === "failed") {
+            setBatch((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    jobs: prev.jobs.map((j) => (j.job_id === newId ? status : j)),
+                  }
+                : prev
+            );
+            setRetryingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(newId);
+              return next;
+            });
+            return;
+          }
+        }
+
+        setRetryingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(newId);
+          return next;
+        });
+      } catch (err) {
+        console.error("[RETRY:UI] Retry failed:", err);
+        setRetryingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(oldJobId);
+          return next;
+        });
+        setBatch((prev) =>
+          prev
+            ? {
+                ...prev,
+                jobs: prev.jobs.map((j) =>
+                  j.job_id === oldJobId
+                    ? {
+                        ...j,
+                        status: "failed",
+                        message: "We couldn't retry this look. Please try again.",
+                        error: "Retry request failed.",
+                        error_code: "retry_failed",
+                      }
+                    : j
+                ),
+              }
+            : prev
+        );
       }
-      setRetryingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(newId);
-        return next;
-      });
-    } catch (err) {
-      console.error("Retry failed:", err);
-      setRetryingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(oldJobId);
-        return next;
-      });
-    }
-  }, []);
+    },
+    [batch?.batch_id, retryingIds, startBatchPolling]
+  );
 
   const reset = useCallback(() => {
     clearPoll();

@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 
 from app.core.config import get_settings
 from app.models.job import JobRecord
-from app.services.job_service import process_job
+from app.services.job_scheduler import job_scheduler
 from app.services.person_validation import validate_person_images
 from app.services.body_geometry import build_body_geometry_profile
 from app.services.garment_analyzer import analyze_garment
@@ -145,8 +145,9 @@ async def create_job(
         },
     )
     save_job(record, settings)
-    background_tasks.add_task(
-        process_job, job_id, settings,
+    job_scheduler.submit(
+        job_id,
+        settings,
         num_inference_steps=record.request_parameters["num_inference_steps"],
         guidance_scale=record.request_parameters["guidance_scale"],
         seed=record.request_parameters["seed"],

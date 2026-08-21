@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,41 @@ from app.services.storage import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_job_stale_if_needed(record: Any, settings: Settings) -> bool:
+    """Fail jobs that have remained queued/processing beyond a safe generation timeout."""
+    if record is None or record.status not in {"queued", "processing"}:
+        return False
+
+    try:
+        updated_at = datetime.fromisoformat(record.updated_at)
+    except (TypeError, ValueError):
+        updated_at = datetime.now(timezone.utc)
+
+    stale_seconds = (datetime.now(timezone.utc) - updated_at).total_seconds()
+    if stale_seconds <= settings.job_stale_timeout_seconds:
+        return False
+
+    record.status = "failed"
+    record.message = "This look took too long to create. Please retry."
+    record.error = (
+        "Job exceeded the allowed generation time and was marked failed to avoid a never-ending spinner."
+    )
+    record.error_code = "job_stale_timeout"
+    record.provider_metadata = {
+        **(record.provider_metadata if isinstance(record.provider_metadata, dict) else {}),
+        "job_stale_timeout_seconds": settings.job_stale_timeout_seconds,
+        "job_stale_elapsed_seconds": round(stale_seconds, 2),
+    }
+    save_job(record, settings)
+    logger.warning(
+        "Job %s marked stale after %.1fs; current status=%s",
+        record.job_id,
+        stale_seconds,
+        record.status,
+    )
+    return True
 
 
 def _safe_geometry_reference(
@@ -193,6 +229,13 @@ def process_job(
         )
         return
 
+    if _mark_job_stale_if_needed(record, settings):
+        logger.warning("Job %s was already stale before work started.", job_id)
+        return
+
+    print(f"[JOB] process_job entered job={job_id} status={record.status}")
+    logger.info("[JOB] process_job entered job=%s status=%s", job_id, record.status)
+
     record.status = "processing"
     record.message = (
         f"Processing with {record.provider}."
@@ -218,6 +261,9 @@ def process_job(
                 record.person_files or []
             )
         ]
+
+        print(f"[JOB] provider.generate starting job={job_id} provider={record.provider}")
+        logger.info("[JOB] provider.generate starting job=%s provider=%s", job_id, record.provider)
 
         request = TryOnRequest(
             person_image=render_person,
@@ -294,6 +340,7 @@ def process_job(
             )
             print(f"VTON ROUND {attempt_index + 1}/{max_attempts}")
             print(f"PERSON USED: {render_person}")
+            print(f"[JOB] provider.generate attempt={attempt_index + 1}/{max_attempts} job={job_id}")
 
             try:
                 result = provider.generate(request)

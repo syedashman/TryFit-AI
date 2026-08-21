@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.services.job_scheduler import job_scheduler
 from app.services.storage import ensure_storage
 
 
@@ -16,7 +17,11 @@ from app.services.storage import ensure_storage
 async def lifespan(app: FastAPI):
     settings = get_settings()
     ensure_storage(settings)
-    yield
+    job_scheduler.configure(max_workers=max(1, min(settings.max_concurrent_jobs, 3)))
+    try:
+        yield
+    finally:
+        job_scheduler.shutdown()
 
 
 configure_logging()

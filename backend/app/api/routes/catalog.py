@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -14,39 +14,13 @@ from app.models.job import JobRecord
 from app.services.body_geometry import build_body_geometry_profile, geometry_similarity
 from app.services.commercial_prompt import build_commercial_instructions
 from app.services.garment_analyzer import analyze_garment
-from app.services.job_service import process_job
+from app.services.job_scheduler import job_scheduler
 from app.services.person_validation import validate_person_images
 from app.services.photo_category_check import check_photos_match_category
 from app.services.storage import list_jobs, load_job, save_job, save_upload
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 QualityPreset = Literal["fast", "balanced", "high"]
-
-
-async def _schedule_job_with_limit(
-    job_id: str,
-    settings,
-    *,
-    num_inference_steps: int,
-    guidance_scale: float,
-    seed: int,
-    semaphore: asyncio.Semaphore,
-) -> None:
-    async with semaphore:
-        started_at = time.perf_counter()
-        print(f"[PERF] Batch job queue start: job_id={job_id}")
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            process_job,
-            job_id,
-            settings,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            seed=seed,
-        )
-        elapsed = time.perf_counter() - started_at
-        print(f"[PERF] Batch job complete: job_id={job_id} elapsed={elapsed:.2f}s")
 
 
 def _catalog_root() -> Path:
@@ -211,11 +185,11 @@ async def generate_catalog_tryon(
 
     batch_id = uuid4().hex
     jobs: list[JobRecord] = []
-    semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
     batch_started = time.perf_counter()
     print(
         f"[PERF] Batch {batch_id} queued: total_jobs={len(person_paths)} concurrency={settings.max_concurrent_jobs}"
     )
+    print(f"[BATCH] created batch={batch_id} jobs={len(person_paths)} concurrency={settings.max_concurrent_jobs}")
     for index, person_path in enumerate(person_paths, start=1):
         job_id = uuid4().hex
         record = JobRecord(
@@ -266,15 +240,13 @@ async def generate_catalog_tryon(
         )
         save_job(record, settings)
         jobs.append(record)
-        asyncio.create_task(
-            _schedule_job_with_limit(
-                job_id,
-                settings,
-                num_inference_steps=record.request_parameters["num_inference_steps"],
-                guidance_scale=record.request_parameters["guidance_scale"],
-                seed=record.request_parameters["seed"],
-                semaphore=semaphore,
-            )
+        print(f"[JOB] scheduling job={job_id} batch={batch_id} index={index}/{len(person_paths)}")
+        job_scheduler.submit(
+            job_id,
+            settings,
+            num_inference_steps=record.request_parameters["num_inference_steps"],
+            guidance_scale=record.request_parameters["guidance_scale"],
+            seed=record.request_parameters["seed"],
         )
 
     batch_elapsed = time.perf_counter() - batch_started
@@ -298,6 +270,24 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
     if not jobs:
         raise HTTPException(status_code=404, detail="Catalog batch not found.")
     jobs.sort(key=lambda item: int((item.provider_metadata or {}).get("batch_index", 0)))
+    refreshed_jobs: list[JobRecord] = []
+    for job in jobs:
+        if job.status in {"queued", "processing"}:
+            stale = job.updated_at
+            try:
+                updated_at = datetime.fromisoformat(stale)
+            except ValueError:
+                updated_at = datetime.now(timezone.utc)
+            if (datetime.now(timezone.utc) - updated_at).total_seconds() > settings.job_stale_timeout_seconds:
+                job.status = "failed"
+                job.message = "This look took too long to create. Please retry."
+                job.error = "Job exceeded the allowed generation time and was marked failed to avoid a never-ending spinner."
+                job.error_code = "job_stale_timeout"
+                save_job(job, settings)
+        refreshed = load_job(job.job_id, settings)
+        if refreshed is not None:
+            refreshed_jobs.append(refreshed)
+    jobs = refreshed_jobs
     counts = {status: sum(1 for item in jobs if item.status == status) for status in ("queued", "processing", "completed", "failed")}
     completed = counts["completed"]
     total = len(jobs)
@@ -318,9 +308,13 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
 @router.post("/retry/{job_id}", operation_id="retry_catalog_tryon_job")
 def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, object]:
     settings = get_settings()
+    print(f"[RETRY] request job={job_id}")
+
     original = load_job(job_id, settings)
     if original is None:
         raise HTTPException(status_code=404, detail="Job not found.")
+
+    print(f"[RETRY] original person={original.person_file}")
 
     new_job_id = uuid4().hex
     new_seed = original.request_parameters.get("seed")
@@ -334,6 +328,7 @@ def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> d
 
     record = JobRecord(
         job_id=new_job_id,
+        status="queued",
         provider=original.provider,
         message="Retrying this pose.",
         person_file=original.person_file,
@@ -354,14 +349,32 @@ def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> d
             "seed": new_seed,
         },
         provider_metadata=new_metadata,
+        result_file=None,
+        result_url=None,
+        error=None,
+        error_code=None,
+        quality_report={},
+        phase3c2_report={},
+        retry_history=[],
+        generation_rounds=0,
+        quality_score=None,
+        geometry_score=None,
+        generation_time_seconds=None,
+        endpoint_used=None,
+        favorite=False,
+        notes="",
+        downloads=0,
+        share_token=None,
+        deleted_at=None,
     )
     save_job(record, settings)
-    background_tasks.add_task(
-        process_job,
+    print(f"[RETRY] scheduling job={new_job_id}")
+    job_scheduler.submit(
         new_job_id,
         settings,
-        num_inference_steps=record.request_parameters.get("num_inference_steps"),
-        guidance_scale=record.request_parameters.get("guidance_scale"),
+        num_inference_steps=record.request_parameters.get("num_inference_steps", 0),
+        guidance_scale=record.request_parameters.get("guidance_scale", 0.0),
         seed=new_seed,
     )
+    print(f"[RETRY] scheduled job={new_job_id}")
     return {"job_id": new_job_id, "message": "Retrying this pose."}

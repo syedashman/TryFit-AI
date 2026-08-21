@@ -26,3 +26,9 @@ def test_max_concurrent_jobs_has_safe_default():
     settings = Settings(_env_file=None)
     assert settings.max_concurrent_jobs == 2
     assert 1 <= settings.max_concurrent_jobs <= 3
+
+
+def test_job_stale_timeout_has_safe_default():
+    settings = Settings(_env_file=None)
+    assert settings.job_stale_timeout_seconds == 900.0
+    assert settings.job_stale_timeout_seconds > settings.vertex_request_timeout_seconds

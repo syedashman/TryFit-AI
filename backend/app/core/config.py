@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     # responsive without hitting provider rate limits or memory spikes.
     max_concurrent_jobs: int = 2
 
+    # Safe watchdog for generation jobs that get stuck in queued/processing.
+    # This must be comfortably above provider request timeouts so legitimate
+    # Vertex work is not prematurely failed.
+    job_stale_timeout_seconds: float = 900.0
+
     hf_space: str = "zhengchong/CatVTON"
     hf_api_name: str = "/submit_function"
     hf_fallback_api_name: str | None = (
@@ -130,6 +135,13 @@ class Settings(BaseSettings):
             raise ValueError("Provider runtime integer settings cannot be negative.")
         return value
 
+    @field_validator("job_stale_timeout_seconds")
+    @classmethod
+    def validate_job_stale_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("job_stale_timeout_seconds must be greater than zero.")
+        return value
+
     @field_validator("max_concurrent_jobs")
     @classmethod
     def validate_max_concurrent_jobs(cls, value: int) -> int:
@@ -150,6 +162,14 @@ class Settings(BaseSettings):
         if value < 0:
             raise ValueError("Provider runtime timing settings cannot be negative.")
         return value
+
+    @model_validator(mode="after")
+    def validate_runtime_thresholds(self) -> "Settings":
+        if self.job_stale_timeout_seconds <= self.vertex_request_timeout_seconds:
+            raise ValueError(
+                "job_stale_timeout_seconds must be greater than vertex_request_timeout_seconds."
+            )
+        return self
 
     @field_validator(
         "visual_enhancement_sharpness",
