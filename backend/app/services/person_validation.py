@@ -927,43 +927,6 @@ def validate_person_images(
                     visibility
                 )
 
-                portrait_too_small = (
-                    height >= width
-                    and (
-                        width < min_width
-                        or height < min_height
-                    )
-                )
-
-                landscape_too_small = (
-                    height < width
-                    and (
-                        min(
-                            width,
-                            height,
-                        )
-                        < 350
-                        or max(
-                            width,
-                            height,
-                        )
-                        < 500
-                    )
-                )
-
-                if (
-                    portrait_too_small
-                    or landscape_too_small
-                ):
-                    issues.append(
-                        "Resolution is too low "
-                        f"({width}x{height}); use "
-                        f"at least {min_width}x"
-                        f"{min_height} for portrait "
-                        "photos or a 350px short side "
-                        "for landscape references."
-                    )
-
                 if sharpness < min_sharpness:
                     issues.append(
                         "Image appears blurry or "

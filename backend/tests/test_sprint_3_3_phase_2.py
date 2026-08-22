@@ -26,6 +26,52 @@ def test_requires_three_to_five_images(tmp_path: Path) -> None:
     assert any("between 3 and 5" in error for error in report.errors)
 
 
+def test_usable_small_person_dimensions_are_not_rejected(tmp_path: Path) -> None:
+    paths = []
+    for index, size in enumerate(((365, 547), (300, 450), (640, 1138))):
+        path = tmp_path / f"small-person-{index}.jpg"
+        image = Image.new("RGB", size, (205, 190, 170))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((size[0] * 0.3, size[1] * 0.1, size[0] * 0.7, size[1] * 0.35), fill=(170, 120, 90))
+        draw.rectangle((size[0] * 0.25, size[1] * 0.35, size[0] * 0.75, size[1] * 0.85), fill=(45, 55, 75))
+        image.save(path, quality=95)
+        paths.append(path)
+
+    report = validate_person_images(
+        paths,
+        min_sharpness=0,
+        identity_threshold=0,
+    )
+
+    assert report.accepted is True
+    assert all(
+        not any("Resolution" in issue for issue in item.issues)
+        for item in report.images
+    )
+
+
+def test_landscape_and_square_person_images_are_evaluated(tmp_path: Path) -> None:
+    paths = []
+    for index, size in enumerate(((900, 600), (700, 700), (1200, 800))):
+        path = tmp_path / f"shape-{index}.jpg"
+        image = Image.new("RGB", size, (205, 190, 170))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((size[0] * 0.3, size[1] * 0.1, size[0] * 0.7, size[1] * 0.5), fill=(170, 120, 90))
+        draw.rectangle((size[0] * 0.2, size[1] * 0.5, size[0] * 0.8, size[1] * 0.9), fill=(45, 55, 75))
+        image.save(path, quality=95)
+        paths.append(path)
+
+    report = validate_person_images(
+        paths,
+        min_sharpness=0,
+        identity_threshold=0,
+    )
+
+    assert report.accepted is True
+    assert [item.width for item in report.images] == [900, 700, 1200]
+    assert [item.height for item in report.images] == [600, 700, 800]
+
+
 def test_selects_best_of_valid_person_images(tmp_path: Path) -> None:
     paths = []
     for index in range(3):

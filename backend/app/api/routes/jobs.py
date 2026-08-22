@@ -78,7 +78,17 @@ async def create_job(
     person_paths: list[Path] = []
     try:
         for index, upload in enumerate(person_images, start=1):
-            person_paths.append(await save_upload(upload, settings, f"person_{index}"))
+            uploaded_path = await save_upload(upload, settings, f"person_{index}")
+            person_paths.append(uploaded_path)
+            normalized_path = normalize_for_provider(
+                uploaded_path,
+                settings.storage_dir / "normalized",
+                min_width=settings.person_min_width,
+                min_height=settings.person_min_height,
+                max_dimension=2048,
+            )
+            uploaded_path.unlink(missing_ok=True)
+            person_paths[-1] = normalized_path
         garment_path = await save_upload(garment_image, settings, "garment")
     except ValueError as exc:
         for path in person_paths:

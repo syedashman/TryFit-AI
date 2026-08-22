@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,6 +8,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 
 SUPPORTED_OUTPUT_FORMATS = {"PNG", "JPEG"}
+LOGGER = logging.getLogger(__name__)
 
 
 def normalize_for_provider(
@@ -14,6 +16,9 @@ def normalize_for_provider(
     destination_dir: Path,
     *,
     output_format: str = "PNG",
+    min_width: int | None = None,
+    min_height: int | None = None,
+    max_dimension: int | None = None,
 ) -> Path:
     """Normalize an image for stable provider uploads.
 
@@ -70,6 +75,43 @@ def normalize_for_provider(
         with Image.open(source) as opened_image:
             image = ImageOps.exif_transpose(
                 opened_image
+            )
+            original_size = image.size
+
+            scale = 1.0
+            if min_width and min_height:
+                scale = max(
+                    1.0,
+                    min_width / image.width,
+                    min_height / image.height,
+                )
+
+            if max_dimension:
+                scale = min(
+                    scale,
+                    max_dimension / max(
+                        image.width * scale,
+                        image.height * scale,
+                    ),
+                )
+
+            if scale != 1.0:
+                image = image.resize(
+                    (
+                        max(1, round(image.width * scale)),
+                        max(1, round(image.height * scale)),
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
+
+            LOGGER.info(
+                "original_size=%sx%s normalized_size=%sx%s "
+                "dimension_normalized=%s",
+                original_size[0],
+                original_size[1],
+                image.width,
+                image.height,
+                str(original_size != image.size).lower(),
             )
 
             if normalized_format == "JPEG":
