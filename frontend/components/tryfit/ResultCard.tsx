@@ -63,7 +63,7 @@ export default function ResultCard({
               aria-label={`View look ${index + 1} fullscreen`}
             >
               <Image
-                src={jobResultUrl(job.job_id)}
+                src={jobResultUrl(job.job_id, job.updated_at)}
                 alt={`Try Fit look ${index + 1}`}
                 fill
                 sizes="(max-width: 768px) 50vw, 300px"
@@ -74,7 +74,7 @@ export default function ResultCard({
             </button>
             <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 bg-gradient-to-t from-ink/70 to-transparent p-3 opacity-0 transition group-hover:opacity-100 sm:pointer-events-auto">
               <button
-                onClick={() => downloadImage(jobResultUrl(job.job_id), filename)}
+                onClick={() => downloadImage(jobResultUrl(job.job_id, job.updated_at), filename)}
                 className="pointer-events-auto rounded-full bg-parchment/90 px-4 py-1.5 text-xs font-semibold text-emerald-deep transition hover:bg-parchment"
               >
                 Download
@@ -112,7 +112,7 @@ export default function ResultCard({
         <div className="flex gap-2">
           {job.status === "completed" && !isRetrying && (
             <button
-              onClick={() => downloadImage(jobResultUrl(job.job_id), filename)}
+              onClick={() => downloadImage(jobResultUrl(job.job_id, job.updated_at), filename)}
               className="rounded-full border border-ink/15 px-3 py-1 text-xs font-semibold text-ink/70"
             >
               Download

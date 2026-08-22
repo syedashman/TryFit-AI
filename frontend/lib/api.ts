@@ -45,11 +45,13 @@ export async function fetchCatalog(): Promise<CatalogResponse> {
 
 export type BatchJob = {
   job_id: string;
+  slot_id?: string;
   status: "queued" | "processing" | "completed" | "failed";
   message: string;
   error?: string | null;
   error_code?: string | null;
   result_url?: string | null;
+  updated_at?: string;
   provider_metadata?: Record<string, unknown>;
 };
 
@@ -125,6 +127,7 @@ export async function fetchJobStatus(jobId: string): Promise<BatchJob> {
   return res.json();
 }
 
-export function jobResultUrl(jobId: string): string {
-  return `${API_BASE}/api/jobs/${jobId}/result`;
+export function jobResultUrl(jobId: string, version?: string): string {
+  const base = `${API_BASE}/api/jobs/${jobId}/result`;
+  return version ? `${base}?v=${encodeURIComponent(version)}` : base;
 }

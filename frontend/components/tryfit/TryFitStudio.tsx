@@ -9,7 +9,6 @@ import { useTryFit } from "@/lib/useTryFit";
 import { friendlyError, prefersReducedMotion } from "@/lib/tryfit";
 import GarmentPanel from "./GarmentPanel";
 import UploadPanel from "./UploadPanel";
-import GeneratingPanel from "./GeneratingPanel";
 import ResultsPanel from "./ResultsPanel";
 
 const SUPPORTED = ["men", "women"];
@@ -133,8 +132,15 @@ export default function TryFitStudio({
             />
           )}
 
-          {(tf.stage === "submitting" || tf.stage === "processing") && (
-            <GeneratingPanel expected={tf.batch?.expected_outputs || Math.max(tf.files.length, 3)} progress={tf.batch?.progress_percent || 8} />
+          {tf.batch && (tf.stage === "submitting" || tf.stage === "processing" || tf.stage === "done") && (
+            <ResultsPanel
+              batch={tf.batch}
+              category={categoryKey}
+              productNumber={productNumber}
+              retryingIds={tf.retryingIds}
+              onRetry={tf.retryPose}
+              onReset={tf.reset}
+            />
           )}
 
           {tf.stage === "error" && (
@@ -145,16 +151,6 @@ export default function TryFitStudio({
             </div>
           )}
 
-          {tf.stage === "done" && tf.batch && (
-            <ResultsPanel
-              batch={tf.batch}
-              category={categoryKey}
-              productNumber={productNumber}
-              retryingIds={tf.retryingIds}
-              onRetry={tf.retryPose}
-              onReset={tf.reset}
-            />
-          )}
         </div>
       </div>
     </div>

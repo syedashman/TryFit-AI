@@ -92,6 +92,31 @@ a {
   transform: translateX(120%);
 }
 
+.tryfit-loading-card {
+  background: linear-gradient(145deg, var(--tryfit-panel) 0%, var(--tryfit-card) 58%, #ece8e1 100%);
+  box-shadow: 0 12px 24px rgba(17, 17, 17, 0.06);
+}
+
+.tryfit-loading-glow {
+  background: radial-gradient(circle at 50% 42%, rgba(200, 176, 141, 0.12), transparent 44%);
+}
+
+.tryfit-sparkle {
+  animation: tryfit-sparkle-drift 3.2s ease-in-out infinite;
+}
+
+@keyframes tryfit-sparkle-drift {
+  0%,
+  100% {
+    transform: rotate(-10deg) scale(0.96);
+    opacity: 0.76;
+  }
+  50% {
+    transform: rotate(10deg) scale(1.05);
+    opacity: 1;
+  }
+}
+
 :focus-visible {
   outline: 2px solid rgba(17, 22, 18, 0.8);
   outline-offset: 3px;
@@ -104,7 +129,8 @@ a {
 
   .nav-link::after,
   .fabric-shimmer::after,
-  .tryfit-shimmer::before {
+  .tryfit-shimmer::before,
+  .tryfit-sparkle {
     animation: none;
     transition: none;
     transform: none;

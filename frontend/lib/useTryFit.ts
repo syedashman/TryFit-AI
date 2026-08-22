@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BatchStatus,
   fetchBatchStatus,
-  fetchJobStatus,
   generateTryOn,
   retryJob,
 } from "./api";
@@ -21,7 +20,46 @@ export const MIN_PHOTOS = 3;
 export const MAX_PHOTOS = 5;
 
 const POLL_INTERVAL_MS = 2500;
-const MAX_RETRY_POLLS = 40;
+
+function mergeBatchStatus(
+  previous: BatchStatus | null,
+  incoming: BatchStatus
+): BatchStatus {
+  const previousById = new Map((previous?.jobs || []).map((job) => [job.job_id, job]));
+  const jobs = incoming.jobs
+    .map((job, index) => ({
+      ...previousById.get(job.job_id),
+      ...job,
+      slot_id: previous?.jobs[index]?.slot_id || job.slot_id || `slot-${index}`,
+    }))
+    .slice(0, incoming.expected_outputs);
+  return { ...incoming, jobs };
+}
+
+function optimisticBatch(photoCount: number): BatchStatus {
+  const jobs = Array.from({ length: photoCount }, (_, index) => ({
+    job_id: `pending-${index}`,
+    slot_id: `slot-${index}`,
+    status: "queued" as const,
+    message: "Creating your look…",
+    result_url: null,
+    error: null,
+    error_code: null,
+  }));
+
+  return {
+    batch_id: "pending",
+    expected_outputs: photoCount,
+    completed_outputs: 0,
+    failed_outputs: 0,
+    pending_outputs: photoCount,
+    progress_percent: 0,
+    all_finished: false,
+    all_successful: false,
+    counts: { queued: photoCount, processing: 0, completed: 0, failed: 0 },
+    jobs,
+  };
+}
 
 /**
  * Encapsulates the full Try Fit lifecycle (photo selection, generation,
@@ -65,7 +103,16 @@ export function useTryFit({
         try {
           console.log("[RETRY:UI] polling batch", batchId);
           const status = await fetchBatchStatus(batchId);
-          setBatch(status);
+          setBatch((previous) => mergeBatchStatus(previous, status));
+          setRetryingIds((previous) => {
+            const next = new Set(previous);
+            status.jobs.forEach((job) => {
+              if (job.status === "completed" || job.status === "failed") {
+                next.delete(job.job_id);
+              }
+            });
+            return next;
+          });
           if (status.all_finished) {
             clearPoll();
             setStage("done");
@@ -95,7 +142,7 @@ export function useTryFit({
       fetchBatchStatus(savedId)
         .then((status) => {
           if (cancelled) return;
-          setBatch(status);
+          setBatch((previous) => mergeBatchStatus(previous, status));
           if (status.all_finished) {
             setStage("done");
           } else {
@@ -103,7 +150,7 @@ export function useTryFit({
             pollRef.current = setInterval(async () => {
               try {
                 const next = await fetchBatchStatus(savedId);
-                setBatch(next);
+                setBatch((previous) => mergeBatchStatus(previous, next));
                 if (next.all_finished) {
                   clearPoll();
                   setStage("done");
@@ -182,6 +229,8 @@ export function useTryFit({
   const startGeneration = useCallback(async () => {
     setStage("submitting");
     setErrorMessage(null);
+    setBatch(optimisticBatch(files.length));
+    setStage("processing");
     try {
       const res = await generateTryOn({
         category,
@@ -193,9 +242,29 @@ export function useTryFit({
       rememberBatch(storageKey, res.batch_id);
       startBatchPolling(res.batch_id);
     } catch (err) {
-      setStage("error");
       console.error("Generation request failed:", err);
       setErrorMessage(err instanceof Error ? err.message : "start");
+      setBatch((previous) =>
+        previous
+          ? {
+              ...previous,
+              all_finished: true,
+              all_successful: false,
+              failed_outputs: previous.jobs.length,
+              pending_outputs: 0,
+              progress_percent: 100,
+              counts: { queued: 0, processing: 0, completed: 0, failed: previous.jobs.length },
+              jobs: previous.jobs.map((job) => ({
+                ...job,
+                status: "failed" as const,
+                message: "We couldn't start this Try Fit. Please try again.",
+                error: "Generation request failed.",
+                error_code: "generation_start_failed",
+              })),
+            }
+          : previous
+      );
+      setStage("done");
     }
   }, [category, productNumber, colorName, files, startBatchPolling, storageKey]);
 
@@ -205,75 +274,38 @@ export function useTryFit({
 
       console.log("[RETRY:UI] click job=", oldJobId);
       setRetryingIds((prev) => new Set(prev).add(oldJobId));
+      setBatch((prev) =>
+        prev
+          ? {
+              ...prev,
+              all_finished: false,
+              all_successful: false,
+              jobs: prev.jobs.map((job) =>
+                job.job_id === oldJobId
+                  ? {
+                      ...job,
+                      status: "processing",
+                      message: "Reworking this look…",
+                      result_url: null,
+                      error: null,
+                      error_code: null,
+                    }
+                  : job
+              ),
+            }
+          : prev
+      );
 
       try {
         console.log("[RETRY:UI] POST start job=", oldJobId);
         const res = await retryJob(oldJobId);
-        const newId = res.job_id;
-        console.log("[RETRY:UI] POST success newJob=", newId);
-
-        setBatch((prev) =>
-          prev
-            ? {
-                ...prev,
-                jobs: prev.jobs.map((j) =>
-                  j.job_id === oldJobId
-                    ? {
-                        ...j,
-                        job_id: newId,
-                        status: "processing",
-                        message: "Reworking this look…",
-                        result_url: null,
-                        error: null,
-                        error_code: null,
-                      }
-                    : j
-                ),
-              }
-            : prev
-        );
-
-        setRetryingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(oldJobId);
-          next.add(newId);
-          return next;
-        });
+        console.log("[RETRY:UI] POST success job=", res.job_id);
 
         const currentBatchId = batch?.batch_id;
         if (currentBatchId) {
           console.log("[RETRY:UI] polling resumed batch=", currentBatchId);
           startBatchPolling(currentBatchId);
         }
-
-        for (let attempt = 0; attempt < MAX_RETRY_POLLS; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-          const status = await fetchJobStatus(newId);
-          console.log("[RETRY:UI] job status=", newId, status.status);
-
-          if (status.status === "completed" || status.status === "failed") {
-            setBatch((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    jobs: prev.jobs.map((j) => (j.job_id === newId ? status : j)),
-                  }
-                : prev
-            );
-            setRetryingIds((prev) => {
-              const next = new Set(prev);
-              next.delete(newId);
-              return next;
-            });
-            return;
-          }
-        }
-
-        setRetryingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(newId);
-          return next;
-        });
       } catch (err) {
         console.error("[RETRY:UI] Retry failed:", err);
         setRetryingIds((prev) => {
