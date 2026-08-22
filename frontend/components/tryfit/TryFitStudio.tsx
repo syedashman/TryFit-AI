@@ -139,6 +139,7 @@ export default function TryFitStudio({
               productNumber={productNumber}
               retryingIds={tf.retryingIds}
               onRetry={tf.retryPose}
+              onReplacePhoto={tf.replacePhoto}
               onReset={tf.reset}
             />
           )}

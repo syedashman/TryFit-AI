@@ -25,6 +25,7 @@ from app.services.body_geometry import (
     geometry_similarity,
 )
 from app.services.candidate_selector import (
+    NoEligibleCandidateError,
     choose_best_candidate,
 )
 from app.services.image_normalizer import (
@@ -438,6 +439,18 @@ class VertexTryOnProvider(VTONProvider):
         render_source = request.person_image
 
         if (
+            request.geometry_reference_image is not None
+            and request.geometry_reference_image.resolve()
+            != request.person_image.resolve()
+        ):
+            raise ProviderError(
+                "Identity and geometry references must use the same job person image.",
+                code="identity_reference_conflict",
+                provider="vertex",
+                retryable=False,
+            )
+
+        if (
             request.cloth_type in {"overall", "lower"}
             and request.geometry_reference_image
             is not None
@@ -458,6 +471,26 @@ class VertexTryOnProvider(VTONProvider):
             normalized_dir,
             output_format="PNG",
         )
+
+        print(
+            "[JOB IDENTITY TRACE]",
+            {
+                "slot_index": request.slot_index,
+                "original_person_file": str(request.person_image),
+                "normalized_person_file": str(person),
+                "vertex_person_input": str(person),
+                "garment_input": str(garment),
+                "catalog_model_reference": str(garment),
+                "identity_reference": str(person),
+            },
+        )
+        if person.resolve() == garment.resolve():
+            raise ProviderError(
+                "The person and garment inputs must be different images.",
+                code="identity_reference_conflict",
+                provider="vertex",
+                retryable=False,
+            )
 
         token = self._access_token()
 
@@ -666,18 +699,65 @@ class VertexTryOnProvider(VTONProvider):
             dict[str, Any]
         ] = []
 
-        if (
-            self.settings.geometry_selection_enabled
-            and len(candidate_paths) > 1
-        ):
-            chosen_path, scores = (
-                choose_best_candidate(
+        if candidate_paths:
+            try:
+                chosen_path, scores = choose_best_candidate(
                     candidate_paths,
                     render_reference_profile,
                     full_body_reference_profile,
                     garment_reference_path=request.garment_image,
+                    identity_reference_path=person,
+                    catalog_identity_reference_path=garment,
                 )
-            )
+            except NoEligibleCandidateError as exc:
+                for score in exc.scores:
+                    print(
+                        "CANDIDATE",
+                        {
+                            "job_id": request.job_id,
+                            "slot_index": request.slot_index,
+                            "index": score.index,
+                            "candidate_index": score.index,
+                            "identity_score": round(score.identity_score, 3),
+                            "identity_reliable": score.identity_reliable,
+                            "catalog_face_score": round(score.catalog_face_score, 3),
+                            "catalog_leakage": score.catalog_leakage,
+                            "geometry": round(score.geometry_similarity, 3),
+                            "full_body": round(score.full_body_similarity, 3),
+                            "garment_color": round(score.garment_color_score, 3),
+                            "garment_structure": round(score.garment_structure_score, 3),
+                            "garment_length": round(score.garment_length_score, 3),
+                            "person_fidelity": score.identity_score,
+                            "hard_rejected": score.hard_rejected,
+                            "rejection_reasons": list(score.rejection_reasons or []),
+                            "final_score": score.final_score,
+                        },
+                    )
+                print("NO ELIGIBLE CANDIDATE")
+                garment_reasons = {
+                    "garment_color_mismatch",
+                    "garment_structure_mismatch",
+                    "garment_length_mismatch",
+                    "long_garment_shortened",
+                }
+                has_garment_failure = any(
+                    reason in garment_reasons
+                    for score in exc.scores
+                    for reason in (score.rejection_reasons or [])
+                )
+                raise ProviderError(
+                    "Vertex generated no candidate that passed the quality gates.",
+                    code=(
+                        "garment_fidelity_failed"
+                        if has_garment_failure
+                        else "distorted_tryon_result"
+                    ),
+                    provider="vertex",
+                    retryable=True,
+                    details={
+                        "candidate_scores": [score.to_dict() for score in exc.scores],
+                    },
+                ) from exc
 
             candidate_scores = [
                 item.to_dict()
@@ -691,7 +771,13 @@ class VertexTryOnProvider(VTONProvider):
                 print(
                     "CANDIDATE",
                     {
+                        "job_id": request.job_id,
+                        "slot_index": request.slot_index,
                         "index": s.index,
+                        "identity_score": round(s.identity_score, 3),
+                        "identity_reliable": s.identity_reliable,
+                        "catalog_face_score": round(s.catalog_face_score, 3),
+                        "catalog_leakage": s.catalog_leakage,
                         "geometry": round(
                             s.geometry_similarity, 3
                         ),
@@ -712,17 +798,14 @@ class VertexTryOnProvider(VTONProvider):
                         "long_garment_confidence":
                             s.long_garment_confidence,
                         "final": s.final_score,
+                        "person_fidelity": s.identity_score,
+                        "eligible": not s.hard_rejected,
                         "hard_rejected": s.hard_rejected,
                         "rejection_reasons": list(
                             s.rejection_reasons or []
                         ),
                     },
                 )
-            print(
-                "CHOSEN CANDIDATE:",
-                Path(chosen_path).name,
-            )
-
         else:
             candidate_profile = (
                 build_body_geometry_profile(
@@ -795,6 +878,11 @@ class VertexTryOnProvider(VTONProvider):
                 if candidate_scores
                 else {}
             ),
+        )
+        print(
+                f"SELECTED candidate={chosen_index} "
+                f"slot={request.slot_index} "
+                f"eligible={not bool(selected_score.get('hard_rejected'))}"
         )
 
         if (

@@ -14,6 +14,7 @@ from app.models.job import JobRecord
 from app.services.body_geometry import build_body_geometry_profile, geometry_similarity
 from app.services.commercial_prompt import build_commercial_instructions
 from app.services.garment_analyzer import analyze_garment
+from app.services.image_normalizer import normalize_for_provider
 from app.services.job_scheduler import job_scheduler
 from app.services.person_validation import validate_person_images
 from app.services.photo_category_check import check_photos_match_category
@@ -208,6 +209,7 @@ async def generate_catalog_tryon(
             message=f"Queued {index} of {len(person_paths)}.",
             person_file=str(person_path),
             person_files=[str(path) for path in person_paths],
+            slot_index=index - 1,
             selected_person_index=report.selected_index,
             validation_report=validation_data,
             geometry_profile=person_geometry_profiles[index - 1].to_dict(),
@@ -279,7 +281,16 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
             jobs.append(record)
     if not jobs:
         raise HTTPException(status_code=404, detail="Catalog batch not found.")
-    jobs.sort(key=lambda item: int((item.provider_metadata or {}).get("batch_index", 0)))
+    latest_by_slot: dict[int, JobRecord] = {}
+    for job in jobs:
+        metadata = job.provider_metadata or {}
+        raw_slot = job.slot_index
+        if raw_slot is None:
+            raw_slot = int(metadata.get("batch_index", 1)) - 1
+        current = latest_by_slot.get(raw_slot)
+        if current is None or job.created_at > current.created_at:
+            latest_by_slot[raw_slot] = job
+    jobs = [latest_by_slot[index] for index in sorted(latest_by_slot)]
     refreshed_jobs: list[JobRecord] = []
     for job in jobs:
         if job.status in {"queued", "processing"}:
@@ -343,6 +354,8 @@ def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> d
         message="Retrying this pose.",
         person_file=original.person_file,
         person_files=list(original.person_files),
+        slot_index=original.slot_index,
+        parent_job_id=job_id,
         selected_person_index=original.selected_person_index,
         validation_report=dict(original.validation_report),
         geometry_profile=dict(original.geometry_profile),
@@ -388,3 +401,98 @@ def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> d
     )
     print(f"[RETRY] scheduled job={new_job_id}")
     return {"job_id": new_job_id, "message": "Retrying this pose."}
+
+
+@router.post("/retry/{job_id}/replace-photo", operation_id="replace_catalog_tryon_photo")
+async def replace_catalog_tryon_photo(
+    job_id: str,
+    photo: UploadFile = File(...),
+) -> dict[str, object]:
+    settings = get_settings()
+    original = load_job(job_id, settings)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    _validate_upload(photo, settings.allowed_image_types)
+
+    old_person_path = Path(original.person_file)
+    try:
+        uploaded_path = await save_upload(photo, settings, f"replacement_{original.slot_index or 0}")
+        normalized_path = normalize_for_provider(
+            uploaded_path,
+            settings.storage_dir / "normalized",
+            min_width=settings.person_min_width,
+            min_height=settings.person_min_height,
+            max_dimension=2048,
+        )
+        uploaded_path.unlink(missing_ok=True)
+
+        report = validate_person_images(
+            [normalized_path],
+            min_images=1,
+            max_images=1,
+            min_width=settings.person_min_width,
+            min_height=settings.person_min_height,
+            min_sharpness=settings.person_min_sharpness,
+            identity_threshold=0.0,
+            identity_hard_reject_threshold=0.0,
+            cloth_type=original.cloth_type,
+        )
+        if not report.accepted or report.selected_file is None:
+            normalized_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "replacement_photo_rejected", "validation": report.to_dict()},
+            )
+
+        replacement_profile = build_body_geometry_profile(normalized_path)
+        person_files = list(original.person_files)
+        slot_index = original.slot_index
+        if slot_index is not None and 0 <= slot_index < len(person_files):
+            person_files[slot_index] = str(normalized_path)
+
+        original.person_file = str(normalized_path)
+        original.person_files = person_files
+        original.selected_person_index = 0
+        original.validation_report = report.to_dict()
+        original.geometry_profile = replacement_profile.to_dict()
+        original.geometry_reference_index = slot_index
+        original.status = "queued"
+        original.message = "Replacement photo queued."
+        original.result_file = None
+        original.result_url = None
+        original.error = None
+        original.error_code = None
+        original.quality_report = {}
+        original.phase3c2_report = {}
+        original.generation_rounds = 0
+        original.quality_score = None
+        original.geometry_score = None
+        original.provider_metadata = {
+            **(original.provider_metadata or {}),
+            "replacement_photo": True,
+            "person_source_framing": report.images[0].framing,
+        }
+        save_job(original, settings)
+        job_scheduler.submit(
+            original.job_id,
+            settings,
+            num_inference_steps=original.request_parameters.get("num_inference_steps", 0),
+            guidance_scale=original.request_parameters.get("guidance_scale", 0.0),
+            seed=original.request_parameters.get("seed", settings.hf_seed),
+        )
+        if old_person_path != normalized_path and old_person_path not in map(Path, person_files):
+            old_person_path.unlink(missing_ok=True)
+        return {
+            "job_id": original.job_id,
+            "batch_id": original.provider_metadata.get("batch_id"),
+            "slot_index": original.slot_index,
+            "person_file": original.person_file,
+            "message": "Replacement photo queued.",
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        for path in (locals().get("uploaded_path"), locals().get("normalized_path")):
+            if isinstance(path, Path):
+                path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

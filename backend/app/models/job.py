@@ -20,6 +20,8 @@ class JobRecord(BaseModel):
     message: str = "Job queued."
     person_file: str
     person_files: list[str] = Field(default_factory=list)
+    slot_index: int | None = None
+    parent_job_id: str | None = None
     selected_person_index: int | None = None
     validation_report: dict[str, object] = Field(default_factory=dict)
     geometry_profile: dict[str, object] = Field(default_factory=dict)

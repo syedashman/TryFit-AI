@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PIL import Image, ImageDraw
 from fastapi.testclient import TestClient
 
 from app.api.routes import catalog as catalog_route
@@ -21,6 +22,7 @@ def _job_record(tmp_path: Path, *, job_id: str = "retry-job-123") -> JobRecord:
         provider="vertex",
         person_file=str(person_path),
         person_files=[str(person_path), str(person_path)],
+        slot_index=1,
         selected_person_index=0,
         geometry_profile={"body": "ok"},
         geometry_reference_index=0,
@@ -63,6 +65,8 @@ def test_catalog_retry_uses_scheduler_and_preserves_person_file(tmp_path: Path, 
     assert saved is not None
     assert saved.person_file == record.person_file
     assert saved.person_files == record.person_files
+    assert saved.slot_index == record.slot_index
+    assert saved.parent_job_id == record.job_id
     assert saved.status == "queued"
     assert saved.provider_metadata["retried_from"] == record.job_id
 
@@ -76,3 +80,74 @@ def test_catalog_retry_invalid_job_id_returns_404(tmp_path: Path, monkeypatch) -
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Job not found."
+
+
+def test_catalog_batch_status_collapses_retry_into_original_slot(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(_env_file=None, storage_dir=tmp_path / "storage")
+    original = _job_record(tmp_path, job_id="original")
+    original.slot_index = 1
+    original.created_at = "2026-08-22T10:00:00+00:00"
+    original.updated_at = original.created_at
+    retry = original.model_copy(
+        update={
+            "job_id": "retry",
+            "parent_job_id": "original",
+            "created_at": "2026-08-22T10:01:00+00:00",
+            "updated_at": "2026-08-22T10:01:00+00:00",
+            "status": "completed",
+            "result_file": str(tmp_path / "retry-result.png"),
+        }
+    )
+    save_job(original, settings)
+    save_job(retry, settings)
+
+    monkeypatch.setattr(catalog_route, "get_settings", lambda: settings)
+
+    with TestClient(app) as client:
+        response = client.get("/api/catalog/batch/batch-abc")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["expected_outputs"] == 1
+    assert len(payload["jobs"]) == 1
+    assert payload["jobs"][0]["job_id"] == "retry"
+    assert payload["jobs"][0]["slot_index"] == 1
+
+
+def test_replace_photo_updates_only_target_job_slot(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(_env_file=None, storage_dir=tmp_path / "storage")
+    record = _job_record(tmp_path, job_id="replace-job")
+    record.slot_index = 1
+    save_job(record, settings)
+    replacement = tmp_path / "replacement.png"
+    image = Image.new("RGB", (600, 900), (180, 170, 160))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((220, 80, 380, 240), fill=(150, 100, 80))
+    draw.rectangle((170, 240, 430, 780), fill=(30, 50, 80))
+    for offset in range(0, 600, 20):
+        draw.line((0, offset, 600, offset + 120), fill=(220, 220, 220), width=2)
+    image.save(replacement)
+
+    scheduled: dict[str, object] = {}
+    monkeypatch.setattr(catalog_route, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        catalog_route.job_scheduler,
+        "submit",
+        lambda job_id, settings_arg, **kwargs: scheduled.update(job_id=job_id, kwargs=kwargs),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/catalog/retry/{record.job_id}/replace-photo",
+            files={"photo": ("replacement.png", replacement.read_bytes(), "image/png")},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["job_id"] == record.job_id
+    assert scheduled["job_id"] == record.job_id
+    saved = load_job(record.job_id, settings)
+    assert saved is not None
+    assert saved.person_file != record.person_file
+    assert saved.person_files[record.slot_index] == saved.person_file
+    assert saved.slot_index == record.slot_index
+    assert saved.status == "queued"

@@ -1115,10 +1115,13 @@ def validate_person_images(
         and consistency
         < identity_hard_reject_threshold
     ):
-        errors.append(
-            "The uploaded photos appear "
-            "strongly inconsistent. Upload "
-            "3-5 clear photos of the same person."
+        _append_unique(
+            warnings,
+            (
+                "Cross-photo identity confidence is low; "
+                "each uploaded photo will be evaluated "
+                "independently for its own try-on slot."
+            ),
         )
 
     elif (

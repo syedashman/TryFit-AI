@@ -46,6 +46,8 @@ export async function fetchCatalog(): Promise<CatalogResponse> {
 export type BatchJob = {
   job_id: string;
   slot_id?: string;
+  slot_index?: number | null;
+  parent_job_id?: string | null;
   status: "queued" | "processing" | "completed" | "failed";
   message: string;
   error?: string | null;
@@ -130,4 +132,22 @@ export async function fetchJobStatus(jobId: string): Promise<BatchJob> {
 export function jobResultUrl(jobId: string, version?: string): string {
   const base = `${API_BASE}/api/jobs/${jobId}/result`;
   return version ? `${base}?v=${encodeURIComponent(version)}` : base;
+}
+
+export async function replaceJobPhoto(
+  jobId: string,
+  photo: File
+): Promise<{ job_id: string; batch_id?: string; slot_index?: number | null; message: string }> {
+  const form = new FormData();
+  form.append("photo", photo);
+  const res = await fetch(`${API_BASE}/api/catalog/retry/${jobId}/replace-photo`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const message = detail?.detail?.message || detail?.detail || `Failed to replace photo (${res.status})`;
+    throw new Error(typeof message === "string" ? message : JSON.stringify(message));
+  }
+  return res.json();
 }

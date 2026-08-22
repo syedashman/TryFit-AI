@@ -13,6 +13,7 @@ export default function ResultsPanel({
   productNumber,
   retryingIds,
   onRetry,
+  onReplacePhoto,
   onReset,
 }: {
   batch: BatchStatus;
@@ -20,6 +21,7 @@ export default function ResultsPanel({
   productNumber: string;
   retryingIds: Set<string>;
   onRetry: (jobId: string) => void;
+  onReplacePhoto: (jobId: string, photo: File) => void;
   onReset: () => void;
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
@@ -89,6 +91,7 @@ export default function ResultsPanel({
               isRetrying={false}
               onOpen={() => openLightbox(idx)}
               onRetry={() => onRetry(job.job_id)}
+              onReplacePhoto={(photo) => onReplacePhoto(job.job_id, photo)}
             />
           )
         ))}

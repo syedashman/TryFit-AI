@@ -19,6 +19,7 @@ export default function ResultCard({
   isRetrying,
   onOpen,
   onRetry,
+  onReplacePhoto,
 }: {
   job: BatchJob;
   index: number;
@@ -27,8 +28,10 @@ export default function ResultCard({
   isRetrying: boolean;
   onOpen: () => void;
   onRetry: () => void;
+  onReplacePhoto: (photo: File) => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (prefersReducedMotion() || !cardRef.current) return;
@@ -51,6 +54,16 @@ export default function ResultCard({
   const filename = resultFilename({ category, productNumber, index: index + 1 });
   const isProcessing =
     isRetrying || job.status === "processing" || job.status === "queued";
+
+  function chooseReplacement() {
+    fileInputRef.current?.click();
+  }
+
+  function handleReplacement(event: React.ChangeEvent<HTMLInputElement>) {
+    const photo = event.target.files?.[0];
+    event.target.value = "";
+    if (photo) onReplacePhoto(photo);
+  }
 
   return (
     <div ref={cardRef} className="group">
@@ -93,13 +106,21 @@ export default function ResultCard({
             <p className="text-xs text-ink/50">Reworking this look…</p>
           </div>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-5 text-center">
+          <div className="relative flex h-full flex-col items-center justify-center gap-3 p-5 text-center">
             <span className="flex h-10 w-10 items-center justify-center rounded-full bg-rani/10 text-rani-deep">
               !
             </span>
             <p className="text-sm font-semibold text-ink/70">
               {jobFriendlyError(job)}
             </p>
+            <div className="absolute inset-x-0 bottom-0 hidden items-center justify-center gap-2 bg-gradient-to-t from-ink/70 to-transparent p-3 group-hover:flex">
+              <button onClick={onRetry} className="rounded-full bg-parchment/90 px-4 py-1.5 text-xs font-semibold text-emerald-deep">
+                Retry
+              </button>
+              <button onClick={chooseReplacement} className="rounded-full bg-parchment/20 px-4 py-1.5 text-xs font-semibold text-parchment">
+                Change Photo
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -120,15 +141,26 @@ export default function ResultCard({
           )}
           {(job.status === "completed" || job.status === "failed") &&
             !isRetrying && (
-              <button
-                onClick={onRetry}
-                className="rounded-full border border-ink/15 px-3 py-1 text-xs font-semibold text-ink/70"
-              >
-                Retry
-              </button>
+              <>
+                <button onClick={onRetry} className="rounded-full border border-ink/15 px-3 py-1 text-xs font-semibold text-ink/70">
+                  Retry
+                </button>
+                {job.status === "failed" && (
+                  <button onClick={chooseReplacement} className="rounded-full border border-ink/15 px-3 py-1 text-xs font-semibold text-ink/70">
+                    Change Photo
+                  </button>
+                )}
+              </>
             )}
         </div>
       </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={handleReplacement}
+      />
     </div>
   );
 }

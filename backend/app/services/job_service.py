@@ -255,6 +255,18 @@ def process_job(
 
         render_person = Path(record.person_file)
 
+        logger.info("[IDENTITY] job=%s", job_id)
+        logger.info("[IDENTITY] original_person=%s", render_person)
+        logger.info("[IDENTITY] vertex_person=%s", render_person)
+        logger.info("[IDENTITY] garment_reference=%s", record.garment_file)
+        if Path(record.garment_file).resolve() == render_person.resolve():
+            raise ProviderError(
+                "Person and garment references must be different files.",
+                code="identity_reference_conflict",
+                provider=record.provider,
+                retryable=False,
+            )
+
         person_files = [
             Path(item)
             for item in (
@@ -290,6 +302,8 @@ def process_job(
             commercial_instructions=(
                 record.commercial_instructions
             ),
+                job_id=job_id,
+                slot_index=record.slot_index,
         )
 
         # SAME-PHOTO quality retry (Phase 3C.2).
@@ -511,6 +525,22 @@ def process_job(
             "details",
             None,
         )
+
+        if isinstance(error_details, dict):
+            candidate_scores = error_details.get("candidate_scores")
+            if isinstance(candidate_scores, list):
+                for candidate in candidate_scores:
+                    logger.info(
+                        "CANDIDATE QUALITY job_id=%s slot_index=%s %s",
+                        job_id,
+                        record.slot_index,
+                        candidate,
+                    )
+                logger.info(
+                    "NO ELIGIBLE CANDIDATE job_id=%s slot_index=%s",
+                    job_id,
+                    record.slot_index,
+                )
 
         if isinstance(error_details, dict):
             record.provider_metadata = {

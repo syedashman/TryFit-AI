@@ -5,6 +5,7 @@ import {
   BatchStatus,
   fetchBatchStatus,
   generateTryOn,
+  replaceJobPhoto,
   retryJob,
 } from "./api";
 import { batchStorageKey, forgetBatch, rememberBatch } from "./tryfit";
@@ -25,21 +26,36 @@ function mergeBatchStatus(
   previous: BatchStatus | null,
   incoming: BatchStatus
 ): BatchStatus {
-  const previousById = new Map((previous?.jobs || []).map((job) => [job.job_id, job]));
+  const previousBySlot = new Map(
+    (previous?.jobs || []).map((job, index) => [job.slot_index ?? index, job])
+  );
   const jobs = incoming.jobs
-    .map((job, index) => ({
-      ...previousById.get(job.job_id),
-      ...job,
-      slot_id: previous?.jobs[index]?.slot_id || job.slot_id || `slot-${index}`,
-    }))
-    .slice(0, incoming.expected_outputs);
-  return { ...incoming, jobs };
+    .map((job, index) => {
+      const slotIndex = job.slot_index ?? index;
+      return {
+        ...previousBySlot.get(slotIndex),
+        ...job,
+        slot_index: slotIndex,
+        slot_id:
+          previousBySlot.get(slotIndex)?.slot_id ||
+          job.slot_id ||
+          `slot-${slotIndex}`,
+      };
+    });
+  if (jobs.length > incoming.expected_outputs) {
+    console.error("[TRYFIT] renderedSlots exceeded expected_outputs", {
+      renderedSlots: jobs.length,
+      expectedOutputs: incoming.expected_outputs,
+    });
+  }
+  return { ...incoming, jobs: jobs.slice(0, incoming.expected_outputs) };
 }
 
 function optimisticBatch(photoCount: number): BatchStatus {
   const jobs = Array.from({ length: photoCount }, (_, index) => ({
     job_id: `pending-${index}`,
     slot_id: `slot-${index}`,
+    slot_index: index,
     status: "queued" as const,
     message: "Creating your look…",
     result_url: null,
@@ -109,6 +125,7 @@ export function useTryFit({
             status.jobs.forEach((job) => {
               if (job.status === "completed" || job.status === "failed") {
                 next.delete(job.job_id);
+                if (job.parent_job_id) next.delete(job.parent_job_id);
               }
             });
             return next;
@@ -336,6 +353,65 @@ export function useTryFit({
     [batch?.batch_id, retryingIds, startBatchPolling]
   );
 
+  const replacePhoto = useCallback(
+    async (jobId: string, photo: File) => {
+      if (retryingIds.has(jobId)) return;
+      setRetryingIds((prev) => new Set(prev).add(jobId));
+      setBatch((prev) =>
+        prev
+          ? {
+              ...prev,
+              all_finished: false,
+              all_successful: false,
+              jobs: prev.jobs.map((job) =>
+                job.job_id === jobId
+                  ? {
+                      ...job,
+                      status: "processing" as const,
+                      message: "Checking the replacement photo…",
+                      result_url: null,
+                      error: null,
+                      error_code: null,
+                    }
+                  : job
+              ),
+            }
+          : prev
+      );
+      try {
+        const res = await replaceJobPhoto(jobId, photo);
+        if (res.batch_id) startBatchPolling(res.batch_id);
+        else if (batch?.batch_id) startBatchPolling(batch.batch_id);
+      } catch (err) {
+        console.error("[REPLACE:UI] failed", err);
+        setRetryingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(jobId);
+          return next;
+        });
+        setBatch((prev) =>
+          prev
+            ? {
+                ...prev,
+                jobs: prev.jobs.map((job) =>
+                  job.job_id === jobId
+                    ? {
+                        ...job,
+                        status: "failed" as const,
+                        message: "We couldn't use that photo.",
+                        error: "Replacement photo failed.",
+                        error_code: "replacement_photo_failed",
+                      }
+                    : job
+                ),
+              }
+            : prev
+        );
+      }
+    },
+    [batch?.batch_id, retryingIds, startBatchPolling]
+  );
+
   const reset = useCallback(() => {
     clearPoll();
     forgetBatch(storageKey);
@@ -364,6 +440,7 @@ export function useTryFit({
     removeFile,
     startGeneration,
     retryPose,
+    replacePhoto,
     reset,
   };
 }

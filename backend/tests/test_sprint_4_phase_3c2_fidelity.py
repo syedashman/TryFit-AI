@@ -27,7 +27,7 @@ from app.providers.base import (
 )
 from app.services import job_service
 from app.services.body_geometry import build_body_geometry_profile
-from app.services.candidate_selector import choose_best_candidate
+from app.services.candidate_selector import NoEligibleCandidateError, choose_best_candidate
 from app.services.garment_fidelity import evaluate_garment_fidelity
 from app.services.storage import load_job, save_job
 
@@ -106,12 +106,14 @@ def test_rejection_reasons_serialized_in_to_dict(tmp_path: Path) -> None:
     draw.rectangle((150, 90, 250, 250), fill=(30, 40, 120))
     short_img.save(short)
 
-    _, scores = choose_best_candidate(
-        [short],
-        build_body_geometry_profile(reference_person),
-        build_body_geometry_profile(reference_person),
-        garment_reference_path=long_garment,
-    )
+    with pytest.raises(NoEligibleCandidateError) as error:
+        choose_best_candidate(
+            [short],
+            build_body_geometry_profile(reference_person),
+            build_body_geometry_profile(reference_person),
+            garment_reference_path=long_garment,
+        )
+    scores = error.value.scores
 
 
 

@@ -20,6 +20,8 @@ class TryOnRequest:
     geometry_reference_image: Path | None = None
     geometry_profile: dict[str, Any] | None = None
     commercial_instructions: str | None = None
+    job_id: str | None = None
+    slot_index: int | None = None
 
     def __post_init__(self) -> None:
         self.person_image = Path(

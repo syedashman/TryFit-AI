@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 from app.services.body_geometry import (
     BodyGeometryProfile,
     build_body_geometry_profile,
@@ -32,6 +35,7 @@ WEIGHT_GARMENT_LENGTH = 0.15
 COLOR_HARD_REJECT_BELOW = 0.55
 STRUCTURE_HARD_REJECT_BELOW = 0.40
 LENGTH_HARD_REJECT_BELOW = 0.40
+IDENTITY_HARD_REJECT_BELOW = 0.32
 
 # Penalty applied to a hard-rejected candidate's final score so an eligible
 # candidate is always preferred when one exists.
@@ -48,6 +52,10 @@ class CandidateScore:
     hard_rejected: bool
     penalties: dict[str, float]
     candidate_profile: dict[str, object]
+    identity_score: float = 1.0
+    identity_reliable: bool = False
+    catalog_face_score: float = 0.0
+    catalog_leakage: bool = False
     garment_color_score: float = 1.0
     garment_structure_score: float = 1.0
     garment_length_score: float = 1.0
@@ -77,6 +85,10 @@ class CandidateScore:
             "long_garment_confidence":
                 self.long_garment_confidence,
             "final_score": self.final_score,
+            "identity_score": self.identity_score,
+            "identity_reliable": self.identity_reliable,
+            "catalog_face_score": self.catalog_face_score,
+            "catalog_leakage": self.catalog_leakage,
             "hard_rejected":
                 self.hard_rejected,
             "rejection_reasons":
@@ -100,6 +112,85 @@ class CandidateScore:
             payload["error"] = self.error
 
         return payload
+
+
+class NoEligibleCandidateError(ValueError):
+    """Raised when every evaluated candidate fails a hard quality gate."""
+
+    def __init__(self, scores: list[CandidateScore]) -> None:
+        self.scores = scores
+        super().__init__("No eligible candidate passed the quality gates.")
+
+
+def _face_identity_signal(
+    reference_path: Path,
+    candidate_path: Path,
+) -> tuple[float, bool]:
+    """Compare detected head regions without treating missing detections as failure."""
+    detectors = [
+        cv2.CascadeClassifier(
+            str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+        ),
+        cv2.CascadeClassifier(
+            str(Path(cv2.data.haarcascades) / "haarcascade_profileface.xml")
+        ),
+    ]
+
+    def crop_face(path: Path) -> np.ndarray | None:
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            return None
+        faces = []
+        for detector in detectors:
+            detected = detector.detectMultiScale(
+                image,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(24, 24),
+            )
+            if len(detected):
+                faces = detected
+                break
+        if len(faces) == 0:
+            return None
+        x, y, width, height = max(faces, key=lambda item: item[2] * item[3])
+        padding_x = int(width * 0.45)
+        padding_y = int(height * 0.65)
+        left = max(0, x - padding_x)
+        top = max(0, y - padding_y)
+        right = min(image.shape[1], x + width + padding_x)
+        bottom = min(image.shape[0], y + height + padding_y)
+        crop = image[top:bottom, left:right]
+        if crop.size == 0:
+            return None
+        return cv2.resize(crop, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+    reference = crop_face(reference_path)
+    candidate = crop_face(candidate_path)
+    if reference is None or candidate is None:
+        return 0.5, False
+
+    def normalized(value: np.ndarray) -> np.ndarray:
+        value = value - float(value.mean())
+        norm = float(np.linalg.norm(value))
+        return value / norm if norm > 0.0 else value
+
+    reference_edges = cv2.Laplacian(reference, cv2.CV_32F)
+    candidate_edges = cv2.Laplacian(candidate, cv2.CV_32F)
+    pixel_similarity = float(
+        np.dot(
+            normalized(reference).ravel(),
+            normalized(candidate).ravel(),
+        )
+    )
+    edge_similarity = float(
+        np.dot(
+            normalized(reference_edges).ravel(),
+            normalized(candidate_edges).ravel(),
+        )
+    )
+    similarity = 0.35 * pixel_similarity + 0.65 * edge_similarity
+    return max(0.0, min(1.0, (similarity + 1.0) / 2.0)), True
 
 
 def _hard_reject(
@@ -157,6 +248,8 @@ def choose_best_candidate(
     full_body_reference:
         BodyGeometryProfile | None = None,
     garment_reference_path: Path | None = None,
+    identity_reference_path: Path | None = None,
+    catalog_identity_reference_path: Path | None = None,
 ) -> tuple[Path, list[CandidateScore]]:
     if not candidate_paths:
         raise ValueError(
@@ -230,10 +323,33 @@ def choose_best_candidate(
 
             validation_errors: dict[str, str] = {}
 
+            identity_score = 1.0
+            identity_reliable = False
+            if identity_reference_path is not None:
+                identity_score, identity_reliable = _face_identity_signal(
+                    identity_reference_path,
+                    path,
+                )
+            catalog_face_score = 0.0
+            catalog_leakage = False
+            if catalog_identity_reference_path is not None:
+                catalog_face_score, catalog_face_reliable = (
+                    _face_identity_signal(
+                        catalog_identity_reference_path,
+                        path,
+                    )
+                )
+                catalog_leakage = bool(
+                    identity_reliable
+                    and catalog_face_reliable
+                    and catalog_face_score >= 0.60
+                    and catalog_face_score > identity_score + 0.08
+                )
+
             # --- Garment color validation ---
             # A validator failure must NOT become a perfect score. Fall back to
             # a neutral 0.5 and record the failure for debugging.
-            color_score = NEUTRAL_VALIDATION_SCORE
+            color_score = 1.0
             if garment_reference_path is not None:
                 try:
                     color_score = float(
@@ -252,8 +368,8 @@ def choose_best_candidate(
                     )
 
             # --- Garment structure / length validation ---
-            structure_score = NEUTRAL_VALIDATION_SCORE
-            length_score = NEUTRAL_VALIDATION_SCORE
+            structure_score = 1.0
+            length_score = 1.0
             long_garment_violation = False
             long_garment_confidence = 0.0
             semantic_fidelity: dict[str, object] | None = None
@@ -354,6 +470,17 @@ def choose_best_candidate(
                 rejection_reasons.append(
                     "long_garment_shortened"
                 )
+            if (
+                identity_reliable
+                and identity_score < IDENTITY_HARD_REJECT_BELOW
+            ):
+                rejection_reasons.append(
+                    "identity_fidelity_failed"
+                )
+            if catalog_leakage:
+                rejection_reasons.append(
+                    "catalog_identity_leakage"
+                )
 
             hard_rejected = bool(rejection_reasons)
 
@@ -414,6 +541,10 @@ def choose_best_candidate(
                     candidate_profile=(
                         candidate.to_dict()
                     ),
+                    identity_score=round(identity_score, 4),
+                    identity_reliable=identity_reliable,
+                    catalog_face_score=round(catalog_face_score, 4),
+                    catalog_leakage=catalog_leakage,
                 )
             )
 
@@ -461,15 +592,10 @@ def choose_best_candidate(
         if not item.hard_rejected
     ]
 
-    # When all valid candidates are distorted,
-    # return the best rejected candidate. The
-    # provider will raise the commercial-quality
-    # error using its selected score.
-    pool = (
-        eligible
-        if eligible
-        else valid_scores
-    )
+    if not eligible:
+        raise NoEligibleCandidateError(scores)
+
+    pool = eligible
 
     winner = max(
         pool,
