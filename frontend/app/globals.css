@@ -101,6 +101,13 @@ a {
   background: radial-gradient(circle at 50% 42%, rgba(200, 176, 141, 0.12), transparent 44%);
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .group:hover .tryfit-hover-actions {
+    pointer-events: auto;
+    opacity: 1;
+  }
+}
+
 .tryfit-sparkle {
   animation: tryfit-sparkle-drift 3.2s ease-in-out infinite;
 }

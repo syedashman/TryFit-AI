@@ -53,7 +53,7 @@ function mergeBatchStatus(
 
 function optimisticBatch(photoCount: number): BatchStatus {
   const jobs = Array.from({ length: photoCount }, (_, index) => ({
-    job_id: `pending-${index}`,
+    job_id: null,
     slot_id: `slot-${index}`,
     slot_index: index,
     status: "queued" as const,
@@ -75,6 +75,14 @@ function optimisticBatch(photoCount: number): BatchStatus {
     counts: { queued: photoCount, processing: 0, completed: 0, failed: 0 },
     jobs,
   };
+}
+
+function isRealJobId(jobId: string | null | undefined): jobId is string {
+  return Boolean(jobId && !jobId.startsWith("pending-"));
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "status" in error && error.status === 404);
 }
 
 /**
@@ -124,7 +132,7 @@ export function useTryFit({
             const next = new Set(previous);
             status.jobs.forEach((job) => {
               if (job.status === "completed" || job.status === "failed") {
-                next.delete(job.job_id);
+                if (job.job_id) next.delete(job.job_id);
                 if (job.parent_job_id) next.delete(job.parent_job_id);
               }
             });
@@ -138,7 +146,15 @@ export function useTryFit({
         } catch (err) {
           console.error("[RETRY:UI] batch poll failed", err);
           clearPoll();
-          setStage("error");
+          if (isNotFoundError(err)) {
+            forgetBatch(storageKey);
+            setBatch(null);
+            setErrorMessage("Your previous Try Fit session expired. Please try again.");
+            setStage("upload");
+          } else {
+            setErrorMessage("Try Fit is temporarily unavailable. Please try again.");
+            setStage("error");
+          }
         }
       };
 
@@ -156,6 +172,7 @@ export function useTryFit({
     try {
       const savedId = sessionStorage.getItem(storageKey);
       if (!savedId) return;
+      clearPoll();
       fetchBatchStatus(savedId)
         .then((status) => {
           if (cancelled) return;
@@ -163,24 +180,17 @@ export function useTryFit({
           if (status.all_finished) {
             setStage("done");
           } else {
-            setStage("processing");
-            pollRef.current = setInterval(async () => {
-              try {
-                const next = await fetchBatchStatus(savedId);
-                setBatch((previous) => mergeBatchStatus(previous, next));
-                if (next.all_finished) {
-                  clearPoll();
-                  setStage("done");
-                }
-              } catch {
-                clearPoll();
-              }
-            }, POLL_INTERVAL_MS);
+            startBatchPolling(savedId);
           }
         })
-        .catch(() => {
-          // Stale/expired reference — clear it and stay on upload.
+        .catch((err) => {
+          clearPoll();
           forgetBatch(storageKey);
+          if (isNotFoundError(err)) {
+            setBatch(null);
+            setErrorMessage("Your previous Try Fit session expired. Please try again.");
+            setStage("upload");
+          }
         });
     } catch {
       /* sessionStorage unavailable — nothing to recover */
@@ -188,8 +198,7 @@ export function useTryFit({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageKey]);
+  }, [clearPoll, startBatchPolling, storageKey]);
 
   // Cleanup object URLs and timers on unmount.
   useEffect(() => {
@@ -256,6 +265,20 @@ export function useTryFit({
         clothType: "overall",
         personImages: files,
       });
+      const realJobs = (res.jobs || []).filter((job) => isRealJobId(job.job_id));
+      if (realJobs.length !== files.length) {
+        throw new Error("Try Fit returned incomplete job information.");
+      }
+      setBatch((previous) =>
+        previous
+          ? mergeBatchStatus(previous, {
+              ...previous,
+              batch_id: res.batch_id,
+              expected_outputs: res.expected_outputs,
+              jobs: realJobs,
+            })
+          : previous
+      );
       rememberBatch(storageKey, res.batch_id);
       startBatchPolling(res.batch_id);
     } catch (err) {
@@ -287,6 +310,7 @@ export function useTryFit({
 
   const retryPose = useCallback(
     async (oldJobId: string) => {
+      if (!isRealJobId(oldJobId)) return;
       if (retryingIds.has(oldJobId)) return;
 
       console.log("[RETRY:UI] click job=", oldJobId);
@@ -355,6 +379,7 @@ export function useTryFit({
 
   const replacePhoto = useCallback(
     async (jobId: string, photo: File) => {
+      if (!isRealJobId(jobId)) return;
       if (retryingIds.has(jobId)) return;
       setRetryingIds((prev) => new Set(prev).add(jobId));
       setBatch((prev) =>

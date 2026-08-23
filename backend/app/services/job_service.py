@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -214,6 +215,7 @@ def process_job(
     guidance_scale: float,
     seed: int,
 ) -> None:
+    job_started = time.perf_counter()
     record = load_job(
         job_id,
         settings,
@@ -335,6 +337,7 @@ def process_job(
             "garment_fidelity_failed",
         }
 
+        provider_calls = 0
         for attempt_index in range(max_attempts):
             # Same photo every round. render_person is the assigned photo and
             # is never reassigned inside this loop.
@@ -357,7 +360,14 @@ def process_job(
             print(f"[JOB] provider.generate attempt={attempt_index + 1}/{max_attempts} job={job_id}")
 
             try:
+                provider_calls += 1
+                round_started = time.perf_counter()
+                print(f"[PERF] job={job_id} vertex_round_{attempt_index + 1}_start")
                 result = provider.generate(request)
+                print(
+                    f"[PERF] job={job_id} vertex_round_{attempt_index + 1}_end "
+                    f"duration={time.perf_counter() - round_started:.2f}s"
+                )
                 retry_history.append({
                     "attempt": attempt_index + 1,
                     "round": attempt_index + 1,
@@ -478,6 +488,8 @@ def process_job(
             result.image_url
         )
         record.provider_metadata = metadata
+        metadata["provider_calls"] = provider_calls
+        metadata["generation_rounds"] = max(generation_rounds, len(retry_history))
         record.generation_rounds = max(generation_rounds, len(retry_history))
         record.retry_history = retry_history
         record.quality_report = quality.to_dict()
@@ -582,6 +594,12 @@ def process_job(
         )
 
     finally:
+        total_elapsed = time.perf_counter() - job_started
+        print(
+            f"[PERF] job={job_id} total_job={total_elapsed:.2f}s "
+            f"provider_calls={locals().get('provider_calls', 0)} "
+            f"retry_count={max(0, locals().get('provider_calls', 0) - 1)}"
+        )
         try:
             save_job(
                 record,

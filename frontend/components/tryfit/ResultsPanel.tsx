@@ -30,7 +30,7 @@ export default function ResultsPanel({
     () =>
       batch.jobs
         .map((job, idx) => ({ job, idx }))
-        .filter(({ job }) => job.status === "completed"),
+        .filter(({ job }) => job.status === "completed" && Boolean(job.job_id)),
     [batch.jobs]
   );
 
@@ -54,7 +54,7 @@ export default function ResultsPanel({
   async function downloadAll() {
     for (const { job, idx } of completedIndexes) {
       await downloadImage(
-        jobResultUrl(job.job_id, job.updated_at),
+        jobResultUrl(job.job_id!, job.updated_at),
         resultFilename({ category, productNumber, index: idx + 1 })
       );
     }
@@ -79,7 +79,7 @@ export default function ResultsPanel({
         {batch.jobs.map((job, idx) => (
           job.status === "queued" ||
           job.status === "processing" ||
-          retryingIds.has(job.job_id) ? (
+          retryingIds.has(job.job_id || "") ? (
             <TryFitLoadingCard key={job.slot_id || job.job_id} index={idx} />
           ) : (
             <ResultCard
@@ -90,8 +90,8 @@ export default function ResultsPanel({
               productNumber={productNumber}
               isRetrying={false}
               onOpen={() => openLightbox(idx)}
-              onRetry={() => onRetry(job.job_id)}
-              onReplacePhoto={(photo) => onReplacePhoto(job.job_id, photo)}
+              onRetry={() => job.job_id && onRetry(job.job_id)}
+              onReplacePhoto={(photo) => job.job_id && onReplacePhoto(job.job_id, photo)}
             />
           )
         ))}
@@ -117,7 +117,7 @@ export default function ResultsPanel({
       {lightboxIndex !== null && batch.jobs[lightboxIndex] && (
         <ImageLightbox
           src={jobResultUrl(
-            batch.jobs[lightboxIndex].job_id,
+            batch.jobs[lightboxIndex].job_id!,
             batch.jobs[lightboxIndex].updated_at
           )}
           alt={`Try Fit look ${lightboxIndex + 1}`}

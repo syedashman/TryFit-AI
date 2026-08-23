@@ -312,6 +312,15 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
     counts = {status: sum(1 for item in jobs if item.status == status) for status in ("queued", "processing", "completed", "failed")}
     completed = counts["completed"]
     total = len(jobs)
+    all_finished = completed + counts["failed"] == total
+    if all_finished:
+        created_times = [datetime.fromisoformat(item.created_at) for item in jobs]
+        updated_times = [datetime.fromisoformat(item.updated_at) for item in jobs]
+        batch_elapsed = max(
+            0.0,
+            (max(updated_times) - min(created_times)).total_seconds(),
+        )
+        print(f"[PERF] batch={batch_id} total={batch_elapsed:.2f}s")
     return {
         "batch_id": batch_id,
         "expected_outputs": total,
@@ -319,7 +328,7 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
         "failed_outputs": counts["failed"],
         "pending_outputs": counts["queued"] + counts["processing"],
         "progress_percent": round((completed + counts["failed"]) / max(1, total) * 100, 1),
-        "all_finished": completed + counts["failed"] == total,
+        "all_finished": all_finished,
         "all_successful": completed == total,
         "counts": counts,
         "jobs": [item.model_dump() for item in jobs],

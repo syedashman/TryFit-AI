@@ -419,6 +419,7 @@ class VertexTryOnProvider(VTONProvider):
         self,
         request: TryOnRequest,
     ) -> TryOnResult:
+        normalization_started = time.perf_counter()
         missing = self._missing_settings()
 
         if missing:
@@ -693,6 +694,10 @@ class VertexTryOnProvider(VTONProvider):
                 full_body_reference
             )
         )
+        print(
+            f"[PERF] job={request.job_id} normalization="
+            f"{time.perf_counter() - normalization_started:.2f}s"
+        )
 
         chosen_path = candidate_paths[0]
         candidate_scores: list[
@@ -700,6 +705,7 @@ class VertexTryOnProvider(VTONProvider):
         ] = []
 
         if candidate_paths:
+            validation_started = time.perf_counter()
             try:
                 chosen_path, scores = choose_best_candidate(
                     candidate_paths,
@@ -758,6 +764,12 @@ class VertexTryOnProvider(VTONProvider):
                         "candidate_scores": [score.to_dict() for score in exc.scores],
                     },
                 ) from exc
+            finally:
+                print(
+                    f"[PERF] job={request.job_id} candidate_validation="
+                    f"{time.perf_counter() - validation_started:.2f}s "
+                    f"candidate_count={len(candidate_paths)}"
+                )
 
             candidate_scores = [
                 item.to_dict()
@@ -934,7 +946,7 @@ class VertexTryOnProvider(VTONProvider):
                     "the reference outfit.",
                     code="garment_fidelity_failed",
                     provider="vertex",
-                    retryable=True,
+                    retryable=False,
                     details={
                         "rejection_reasons":
                             selected_reasons,
@@ -950,7 +962,7 @@ class VertexTryOnProvider(VTONProvider):
                 "feet, is visible.",
                 code="distorted_tryon_result",
                 provider="vertex",
-                retryable=True,
+                retryable=False,
                 details={
                     "rejection_reasons":
                         selected_reasons,

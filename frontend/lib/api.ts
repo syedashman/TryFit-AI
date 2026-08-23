@@ -44,7 +44,7 @@ export async function fetchCatalog(): Promise<CatalogResponse> {
 }
 
 export type BatchJob = {
-  job_id: string;
+  job_id: string | null;
   slot_id?: string;
   slot_index?: number | null;
   parent_job_id?: string | null;
@@ -77,7 +77,7 @@ export async function generateTryOn(params: {
   clothType: "upper" | "lower" | "overall";
   garmentDescription?: string;
   personImages: File[];
-}): Promise<{ batch_id: string; expected_outputs: number; message: string }> {
+}): Promise<{ batch_id: string; expected_outputs: number; message: string; jobs?: BatchJob[] }> {
   const form = new FormData();
   form.append("category", params.category);
   form.append("product_number", params.productNumber);
@@ -106,7 +106,9 @@ export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new Error(`Failed to load batch status (${res.status})`);
+    const error = new Error(`Failed to load batch status (${res.status})`) as Error & { status?: number };
+    error.status = res.status;
+    throw error;
   }
   return res.json();
 }

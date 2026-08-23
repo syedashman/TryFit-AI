@@ -150,3 +150,26 @@ Vertex's Virtual Try-On model preserves the **pose of the person photo you
 upload**, not the pose of the garment's original model shot. If a result
 looks slightly stiff on some angles, that's the underlying Google model's
 behavior, not something wrong in this codebase.
+
+## 7. Runtime and persistence notes
+
+Catalog jobs are executed in-process by a bounded `ThreadPoolExecutor`. The
+default is `MAX_CONCURRENT_JOBS=2` (configurable from 1 to 3), so independent
+uploaded photos can run concurrently without creating unlimited provider
+requests. One Vertex request asks for `VERTEX_CANDIDATE_COUNT` candidates
+(3 by default); the quality policy allows at most two same-photo generation
+rounds, and provider HTTP retries are separately controlled by
+`VERTEX_MAX_RETRIES`.
+
+Job and batch state is stored as JSON files under `backend/storage/jobs`, with
+uploads and results under the same local storage directory. There is no
+database or remote state store in this project. A Render restart or redeploy
+can therefore lose in-process work and local state unless the service uses a
+persistent Render disk mounted at the configured storage path. The frontend
+clears expired batch references instead of treating a missing batch as a photo
+failure.
+
+Generation logs now include normalization, validation, each Vertex round,
+provider-call count, retry count, candidate count, total job time, and total
+batch time. Real provider measurements require a configured Vertex deployment;
+the automated tests do not claim a production latency before/after number.
