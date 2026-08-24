@@ -74,6 +74,8 @@ async def create_job(
     parsed_steps = _optional_int(num_inference_steps, "num_inference_steps")
     parsed_guidance = _optional_float(guidance_scale, "guidance_scale")
     parsed_seed = _optional_int(seed, "seed")
+    normalized_dir = settings.storage_dir / "normalized"
+    max_dimension = 1024 if settings.tryfit_fast_mode else settings.provider_max_image_dimension
 
     person_paths: list[Path] = []
     try:
@@ -82,14 +84,21 @@ async def create_job(
             person_paths.append(uploaded_path)
             normalized_path = normalize_for_provider(
                 uploaded_path,
-                settings.storage_dir / "normalized",
+                normalized_dir,
                 min_width=settings.person_min_width,
                 min_height=settings.person_min_height,
-                max_dimension=2048,
+                max_dimension=max_dimension,
             )
             uploaded_path.unlink(missing_ok=True)
             person_paths[-1] = normalized_path
-        garment_path = await save_upload(garment_image, settings, "garment")
+        garment_upload_path = await save_upload(garment_image, settings, "garment")
+        garment_path = normalize_for_provider(
+            garment_upload_path,
+            normalized_dir,
+            output_format="PNG",
+            max_dimension=max_dimension,
+        )
+        garment_upload_path.unlink(missing_ok=True)
     except ValueError as exc:
         for path in person_paths:
             path.unlink(missing_ok=True)

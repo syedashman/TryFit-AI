@@ -11,6 +11,12 @@ SUPPORTED_OUTPUT_FORMATS = {"PNG", "JPEG"}
 LOGGER = logging.getLogger(__name__)
 
 
+def is_provider_normalized(source: Path) -> bool:
+    """Return whether a path is an artifact produced for provider reuse."""
+    path = Path(source)
+    return path.parent.name == "normalized" and path.suffix.lower() == ".png"
+
+
 def normalize_for_provider(
     source: Path,
     destination_dir: Path,
@@ -33,6 +39,9 @@ def normalize_for_provider(
     """
     source = Path(source)
     destination_dir = Path(destination_dir)
+
+    if is_provider_normalized(source):
+        return source
 
     if not source.exists():
         raise FileNotFoundError(

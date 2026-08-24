@@ -231,6 +231,14 @@ def process_job(
         )
         return
 
+    try:
+        queue_wait = max(
+            0.0,
+            (datetime.now(timezone.utc) - datetime.fromisoformat(record.created_at)).total_seconds(),
+        )
+    except (TypeError, ValueError):
+        queue_wait = 0.0
+
     if _mark_job_stale_if_needed(record, settings):
         logger.warning("Job %s was already stale before work started.", job_id)
         return
@@ -323,7 +331,7 @@ def process_job(
         max_attempts = max(
             1,
             min(
-                2,
+                1 if settings.tryfit_fast_mode else 2,
                 int(
                     settings
                     .commercial_max_generation_rounds
@@ -441,7 +449,7 @@ def process_job(
         if final_path is not None:
             enhancement = enhance_result_image(
                 final_path,
-                enabled=settings.visual_enhancement_enabled,
+                enabled=settings.visual_enhancement_enabled and not settings.tryfit_fast_mode,
                 sharpness=settings.visual_enhancement_sharpness,
                 contrast=settings.visual_enhancement_contrast,
                 color=settings.visual_enhancement_color,
@@ -597,6 +605,7 @@ def process_job(
         total_elapsed = time.perf_counter() - job_started
         print(
             f"[PERF] job={job_id} total_job={total_elapsed:.2f}s "
+            f"queue_wait={queue_wait:.2f}s "
             f"provider_calls={locals().get('provider_calls', 0)} "
             f"retry_count={max(0, locals().get('provider_calls', 0) - 1)}"
         )

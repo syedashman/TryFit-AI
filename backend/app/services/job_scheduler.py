@@ -18,6 +18,7 @@ class JobScheduler:
         self._lock = threading.Lock()
         self._executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._started = False
+        self._active_job_ids: set[str] = set()
 
     def configure(self, *, max_workers: int) -> None:
         with self._lock:
@@ -39,9 +40,14 @@ class JobScheduler:
         seed: int,
     ) -> None:
         with self._lock:
+            if job_id in self._active_job_ids:
+                logger.warning("JOB %s already scheduled -> skip duplicate scheduling", job_id)
+                print(f"JOB {job_id} already scheduled -> skip duplicate scheduling")
+                return
             if self._executor is None:
                 self.configure(max_workers=max(1, min(settings.max_concurrent_jobs, 3)))
             executor = self._executor
+            self._active_job_ids.add(job_id)
 
         if executor is None:
             raise RuntimeError("Job scheduler executor is not initialized.")
@@ -60,6 +66,8 @@ class JobScheduler:
         )
 
     def _log_future_result(self, job_id: str, future: concurrent.futures.Future[Any]) -> None:
+        with self._lock:
+            self._active_job_ids.discard(job_id)
         try:
             future.result()
         except Exception:

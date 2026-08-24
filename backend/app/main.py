@@ -16,11 +16,17 @@ from app.services.storage import ensure_storage
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    print(
+        f"[STARTUP] storage={settings.storage_dir} "
+        f"workers={settings.max_concurrent_jobs} "
+        f"fast_mode={settings.tryfit_fast_mode}"
+    )
     ensure_storage(settings)
     job_scheduler.configure(max_workers=max(1, min(settings.max_concurrent_jobs, 3)))
     try:
         yield
     finally:
+        print("[SHUTDOWN] TryFit worker scheduler stopping")
         job_scheduler.shutdown()
 
 

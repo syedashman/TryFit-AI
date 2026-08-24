@@ -138,6 +138,9 @@ async def generate_catalog_tryon(
     parsed_guidance = _optional_float(guidance_scale, "guidance_scale")
     parsed_seed = _optional_int(seed, "seed")
     preset = settings.quality_preset(quality_preset)
+    normalization_started = time.perf_counter()
+    normalized_dir = settings.storage_dir / "normalized"
+    max_dimension = 1024 if settings.tryfit_fast_mode else settings.provider_max_image_dimension
 
     person_paths: list[Path] = []
     try:
@@ -146,10 +149,10 @@ async def generate_catalog_tryon(
             person_paths.append(uploaded_path)
             normalized_path = normalize_for_provider(
                 uploaded_path,
-                settings.storage_dir / "normalized",
+                normalized_dir,
                 min_width=settings.person_min_width,
                 min_height=settings.person_min_height,
-                max_dimension=2048,
+                max_dimension=max_dimension,
             )
             uploaded_path.unlink(missing_ok=True)
             person_paths[-1] = normalized_path
@@ -158,6 +161,10 @@ async def generate_catalog_tryon(
             path.unlink(missing_ok=True)
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 
+    decode_resize_elapsed = time.perf_counter() - normalization_started
+    print(f"[PERF] batch preprocessing decode_resize={decode_resize_elapsed:.2f}s")
+
+    validation_started = time.perf_counter()
     report = validate_person_images(
         person_paths,
         min_images=settings.min_person_images,
@@ -173,8 +180,11 @@ async def generate_catalog_tryon(
         for path in person_paths:
             path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail={"code": "person_images_rejected", "message": "Person image validation failed.", "validation": report.to_dict()})
+    print(f"[PERF] batch person_validation={time.perf_counter() - validation_started:.2f}s")
 
+    category_started = time.perf_counter()
     category_ok, category_error = check_photos_match_category(settings, person_paths, category_name)
+    print(f"[PERF] batch category_validation={time.perf_counter() - category_started:.2f}s")
     if not category_ok:
         for path in person_paths:
             path.unlink(missing_ok=True)
@@ -184,14 +194,24 @@ async def generate_catalog_tryon(
     geometry_index = validation_data.get("geometry_reference_index")
     if not isinstance(geometry_index, int) or geometry_index < 0 or geometry_index >= len(person_paths):
         geometry_index = report.selected_index or 0
+    geometry_started = time.perf_counter()
     person_geometry_profiles = [build_body_geometry_profile(path) for path in person_paths]
+    print(f"[PERF] batch geometry_analysis={time.perf_counter() - geometry_started:.2f}s")
     geometry_profile = person_geometry_profiles[geometry_index]
 
     best_matched_person_index = geometry_index
     primary_garment_path = garment_paths[0]
     relative = primary_garment_path.relative_to(product_dir)
     color_name = relative.parts[0] if len(relative.parts) > 1 else "Default"
-    analysis = analyze_garment(primary_garment_path, garment_description, cloth_type)
+    garment_path = normalize_for_provider(
+        primary_garment_path,
+        normalized_dir,
+        output_format="PNG",
+        max_dimension=max_dimension,
+    )
+    garment_started = time.perf_counter()
+    analysis = analyze_garment(garment_path, garment_description, cloth_type)
+    print(f"[PERF] batch garment_analysis={time.perf_counter() - garment_started:.2f}s cached=true")
     base_seed = parsed_seed if parsed_seed is not None else settings.hf_seed
 
     batch_id = uuid4().hex
@@ -214,7 +234,7 @@ async def generate_catalog_tryon(
             validation_report=validation_data,
             geometry_profile=person_geometry_profiles[index - 1].to_dict(),
             geometry_reference_index=index - 1,
-            garment_file=str(primary_garment_path),
+            garment_file=str(garment_path),
             garment_description=(
                 f"{garment_description}; category {category_name}; selected color {color_name}. "
                 "Preserve the complete product identity exactly: all garment pieces, silhouette, length, neckline, "
@@ -313,14 +333,32 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
     completed = counts["completed"]
     total = len(jobs)
     all_finished = completed + counts["failed"] == total
-    if all_finished:
-        created_times = [datetime.fromisoformat(item.created_at) for item in jobs]
-        updated_times = [datetime.fromisoformat(item.updated_at) for item in jobs]
-        batch_elapsed = max(
+    created_times = [datetime.fromisoformat(item.created_at) for item in jobs]
+    batch_started = min(created_times) if created_times else datetime.now(timezone.utc)
+    completed_jobs = [item for item in jobs if item.status == "completed"]
+    first_result_seconds = None
+    if completed_jobs:
+        first_result_seconds = max(
             0.0,
-            (max(updated_times) - min(created_times)).total_seconds(),
+            (min(datetime.fromisoformat(item.updated_at) for item in completed_jobs) - batch_started).total_seconds(),
         )
-        print(f"[PERF] batch={batch_id} total={batch_elapsed:.2f}s")
+    all_results_seconds = None
+    if all_finished and jobs:
+        all_results_seconds = max(
+            0.0,
+            (max(datetime.fromisoformat(item.updated_at) for item in jobs) - batch_started).total_seconds(),
+        )
+    vertex_calls_total = sum(
+        int((item.provider_metadata or {}).get("provider_calls", 0))
+        for item in jobs
+    )
+    if all_finished:
+        print(
+            f"[PERF BATCH] jobs={total} concurrency={settings.max_concurrent_jobs} "
+            f"first_result_seconds={first_result_seconds} "
+            f"all_results_seconds={all_results_seconds} "
+            f"vertex_calls_total={vertex_calls_total}"
+        )
     return {
         "batch_id": batch_id,
         "expected_outputs": total,
@@ -431,7 +469,7 @@ async def replace_catalog_tryon_photo(
             settings.storage_dir / "normalized",
             min_width=settings.person_min_width,
             min_height=settings.person_min_height,
-            max_dimension=2048,
+            max_dimension=1024 if settings.tryfit_fast_mode else settings.provider_max_image_dimension,
         )
         uploaded_path.unlink(missing_ok=True)
 

@@ -173,3 +173,20 @@ Generation logs now include normalization, validation, each Vertex round,
 provider-call count, retry count, candidate count, total job time, and total
 batch time. Real provider measurements require a configured Vertex deployment;
 the automated tests do not claim a production latency before/after number.
+
+The live benchmark used Women product `1`, Default color, and the same three
+sample uploads for three runs. It measured first-result / all-results times of
+`125.68s / 174.49s`, `101.29s / 129.32s`, and `164.68s / 274.49s`.
+The provider returned three candidates in one request per successful job; the
+three runs used 1, 3, and 3 total Vertex calls respectively because some jobs
+failed quality validation. These measurements are evidence, not a latency
+guarantee. The new split logs distinguish local `decode_resize` time from
+`vertex_request` time; the previous 150–210 second “normalization” value had
+included downstream provider and candidate-processing work.
+
+`TRYFIT_FAST_MODE=true` is available for measured demonstrations. It uses a
+1024px provider image cap, one initial quality round, and skips optional visual
+enhancement. It does not disable identity, severe distortion, or garment
+fidelity gates. The default remains conservative: 1536px provider cap, up to
+two quality rounds, and two concurrent jobs. Set `MAX_CONCURRENT_JOBS=3` only
+after confirming Render resources and Vertex quota support it.

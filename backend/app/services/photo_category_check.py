@@ -34,7 +34,6 @@ _NOT_A_PERSON_MESSAGE = (
     "Please upload real photos of yourself, not scenery, objects, or other images."
 )
 
-
 class PhotoCategoryCheckError(Exception):
     """Raised when the photo category check itself fails to run (config/auth/etc)."""
 

@@ -419,7 +419,6 @@ class VertexTryOnProvider(VTONProvider):
         self,
         request: TryOnRequest,
     ) -> TryOnResult:
-        normalization_started = time.perf_counter()
         missing = self._missing_settings()
 
         if missing:
@@ -429,10 +428,7 @@ class VertexTryOnProvider(VTONProvider):
                 + ", ".join(missing)
             )
 
-        normalized_dir = (
-            self.settings.uploads_dir
-            / "normalized"
-        )
+        normalized_dir = self.settings.storage_dir / "normalized"
 
         # Redundant provider-level protection:
         # even if an older job_service passes the face image,
@@ -461,6 +457,7 @@ class VertexTryOnProvider(VTONProvider):
                 request.geometry_reference_image
             )
 
+        decode_resize_started = time.perf_counter()
         person = normalize_for_provider(
             render_source,
             normalized_dir,
@@ -471,6 +468,10 @@ class VertexTryOnProvider(VTONProvider):
             request.garment_image,
             normalized_dir,
             output_format="PNG",
+        )
+        print(
+            f"[PERF] job={request.job_id} decode_resize="
+            f"{time.perf_counter() - decode_resize_started:.2f}s"
         )
 
         print(
@@ -493,6 +494,7 @@ class VertexTryOnProvider(VTONProvider):
                 retryable=False,
             )
 
+        vertex_request_started = time.perf_counter()
         token = self._access_token()
 
         candidate_count = (
@@ -623,6 +625,12 @@ class VertexTryOnProvider(VTONProvider):
                 "no response."
             )
 
+        print(
+            f"[PERF] job={request.job_id} vertex_request="
+            f"{time.perf_counter() - vertex_request_started:.2f}s "
+            f"provider_calls={attempt + 1}"
+        )
+
         try:
             data = response.json()
 
@@ -694,11 +702,6 @@ class VertexTryOnProvider(VTONProvider):
                 full_body_reference
             )
         )
-        print(
-            f"[PERF] job={request.job_id} normalization="
-            f"{time.perf_counter() - normalization_started:.2f}s"
-        )
-
         chosen_path = candidate_paths[0]
         candidate_scores: list[
             dict[str, Any]

@@ -109,9 +109,13 @@ export function useTryFit({
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollGenerationRef = useRef(0);
+  const activeBatchRef = useRef<string | null>(null);
   const storageKey = batchStorageKey(category, productNumber, colorName);
 
   const clearPoll = useCallback(() => {
+    pollGenerationRef.current += 1;
+    activeBatchRef.current = null;
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
@@ -121,12 +125,26 @@ export function useTryFit({
   const startBatchPolling = useCallback(
     (batchId: string) => {
       clearPoll();
+      activeBatchRef.current = batchId;
+      const pollGeneration = pollGenerationRef.current;
       setStage("processing");
 
       const tick = async () => {
+        if (
+          pollGeneration !== pollGenerationRef.current ||
+          activeBatchRef.current !== batchId
+        ) {
+          return;
+        }
         try {
           console.log("[RETRY:UI] polling batch", batchId);
           const status = await fetchBatchStatus(batchId);
+          if (
+            pollGeneration !== pollGenerationRef.current ||
+            activeBatchRef.current !== batchId
+          ) {
+            return;
+          }
           setBatch((previous) => mergeBatchStatus(previous, status));
           setRetryingIds((previous) => {
             const next = new Set(previous);
@@ -144,6 +162,12 @@ export function useTryFit({
             return;
           }
         } catch (err) {
+          if (
+            pollGeneration !== pollGenerationRef.current ||
+            activeBatchRef.current !== batchId
+          ) {
+            return;
+          }
           console.error("[RETRY:UI] batch poll failed", err);
           clearPoll();
           if (isNotFoundError(err)) {
@@ -253,6 +277,7 @@ export function useTryFit({
   );
 
   const startGeneration = useCallback(async () => {
+    clearPoll();
     setStage("submitting");
     setErrorMessage(null);
     setBatch(optimisticBatch(files.length));
@@ -306,7 +331,7 @@ export function useTryFit({
       );
       setStage("done");
     }
-  }, [category, productNumber, colorName, files, startBatchPolling, storageKey]);
+  }, [category, productNumber, colorName, files, clearPoll, startBatchPolling, storageKey]);
 
   const retryPose = useCallback(
     async (oldJobId: string) => {

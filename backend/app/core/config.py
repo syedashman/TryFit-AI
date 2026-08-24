@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     # Bounded concurrency for independent uploaded-photo jobs. Keeps one batch
     # responsive without hitting provider rate limits or memory spikes.
     max_concurrent_jobs: int = 2
+    tryfit_fast_mode: bool = False
+    provider_max_image_dimension: int = 1536
 
     # Safe watchdog for generation jobs that get stuck in queued/processing.
     # This must be comfortably above provider request timeouts so legitimate
