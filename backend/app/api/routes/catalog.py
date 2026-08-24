@@ -238,9 +238,9 @@ async def generate_catalog_tryon(
     jobs: list[JobRecord] = []
     batch_started = time.perf_counter()
     print(
-        f"[PERF] Batch {batch_id} queued: total_jobs={len(person_paths)} concurrency={settings.max_concurrent_jobs}"
+        f"[PERF] Batch {batch_id} queued: total_jobs={len(person_paths)} concurrency={settings.effective_concurrency}"
     )
-    print(f"[BATCH] created batch={batch_id} jobs={len(person_paths)} concurrency={settings.max_concurrent_jobs}")
+    print(f"[BATCH] created batch={batch_id} jobs={len(person_paths)} concurrency={settings.effective_concurrency}")
     for index, person_path in enumerate(person_paths, start=1):
         job_id = uuid4().hex
         record = JobRecord(

@@ -335,8 +335,7 @@ def process_job(
             min(
                 1 if settings.tryfit_fast_mode else 2,
                 int(
-                    settings
-                    .commercial_max_generation_rounds
+                    settings.effective_max_generation_rounds
                 ),
             ),
         )
@@ -427,7 +426,7 @@ def process_job(
                 job_id,
                 settings,
             )
-            if not settings.debug_image_dumps:
+            if not settings.effective_debug_image_dumps:
                 provider_result_path.unlink(missing_ok=True)
 
         if (

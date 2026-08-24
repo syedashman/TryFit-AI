@@ -677,13 +677,23 @@ class Settings(BaseSettings):
 
     @property
     def effective_max_image_dimension(self) -> int:
+        if self.tryfit_fast_mode:
+            return 1024
         if self.max_provider_long_side is not None:
             return self.max_provider_long_side
         return 1024 if self.tryfit_fast_mode else self.provider_max_image_dimension
 
     @property
     def effective_candidate_count(self) -> int:
-        return self.vertex_candidate_count
+        return 2 if self.tryfit_fast_mode else self.vertex_candidate_count
+
+    @property
+    def effective_concurrency(self) -> int:
+        return 2 if self.tryfit_fast_mode else self.max_concurrent_jobs
+
+    @property
+    def effective_debug_image_dumps(self) -> bool:
+        return False if self.tryfit_fast_mode else self.debug_image_dumps
 
     @property
     def effective_max_generation_rounds(self) -> int:

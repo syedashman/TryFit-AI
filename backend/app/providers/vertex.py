@@ -510,7 +510,7 @@ class VertexTryOnProvider(VTONProvider):
         token = self._access_token()
 
         candidate_count = (
-            self.settings.vertex_candidate_count
+            self.settings.effective_candidate_count
             if self.settings
             .geometry_selection_enabled
             else self.settings.vertex_sample_count

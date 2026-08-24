@@ -18,20 +18,21 @@ from app.services.memory_metrics import log_memory
 async def lifespan(app: FastAPI):
     settings = get_settings()
     print(
-        f"[TRYFIT CONFIG] fast_mode={settings.tryfit_fast_mode} "
-        f"provider_long_side={settings.effective_max_image_dimension} "
-        f"candidate_count={settings.vertex_candidate_count} "
-        f"concurrency={settings.max_concurrent_jobs} "
-        f"max_rounds={settings.effective_max_generation_rounds}"
+        f"[TRYFIT EFFECTIVE CONFIG] fast_mode={settings.tryfit_fast_mode} "
+        f"max_dimension={settings.effective_max_image_dimension} "
+        f"candidate_count={settings.effective_candidate_count} "
+        f"concurrency={settings.effective_concurrency} "
+        f"max_rounds={settings.effective_max_generation_rounds} "
+        f"debug_dumps={settings.effective_debug_image_dumps}"
     )
     print(
         f"[STARTUP] storage={settings.storage_dir} "
-        f"workers={settings.max_concurrent_jobs} "
+        f"workers={settings.effective_concurrency} "
         f"fast_mode={settings.tryfit_fast_mode}"
     )
     log_memory("startup")
     ensure_storage(settings)
-    job_scheduler.configure(max_workers=max(1, min(settings.max_concurrent_jobs, 3)))
+    job_scheduler.configure(max_workers=max(1, min(settings.effective_concurrency, 2)))
     try:
         yield
     finally:

@@ -45,7 +45,7 @@ class JobScheduler:
                 print(f"JOB {job_id} already scheduled -> skip duplicate scheduling")
                 return
             if self._executor is None:
-                self.configure(max_workers=max(1, min(settings.max_concurrent_jobs, 3)))
+                self.configure(max_workers=max(1, min(settings.effective_concurrency, 2)))
             executor = self._executor
             self._active_job_ids.add(job_id)
 
