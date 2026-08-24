@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from app.services.person_validation import validate_person_images
@@ -15,15 +16,28 @@ def _make_portrait(path: Path, shift: int = 0) -> None:
     image.save(path, quality=95)
 
 
-def test_requires_three_to_five_images(tmp_path: Path) -> None:
+@pytest.mark.parametrize("image_count", [1, 2, 3])
+def test_accepts_one_to_three_images(tmp_path: Path, image_count: int) -> None:
     paths = []
-    for index in range(2):
+    for index in range(image_count):
+        path = tmp_path / f"person-{index}.jpg"
+        _make_portrait(path, index)
+        paths.append(path)
+    report = validate_person_images(paths, min_sharpness=0)
+    assert report.accepted is True
+    assert len(report.images) == image_count
+
+
+@pytest.mark.parametrize("image_count", [0, 4])
+def test_rejects_outside_one_to_three_images(tmp_path: Path, image_count: int) -> None:
+    paths = []
+    for index in range(image_count):
         path = tmp_path / f"person-{index}.jpg"
         _make_portrait(path, index)
         paths.append(path)
     report = validate_person_images(paths, min_sharpness=0)
     assert report.accepted is False
-    assert any("between 3 and 5" in error for error in report.errors)
+    assert any("between 1 and 3" in error for error in report.errors)
 
 
 def test_selects_best_of_valid_person_images(tmp_path: Path) -> None:

@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     max_image_size_mb: int = 15
     storage_dir: Path = Path("storage")
 
-    min_person_images: int = 3
-    max_person_images: int = 5
+    min_person_images: int = 1
+    max_person_images: int = 3
     person_min_width: int = 300
     person_min_height: int = 375
     person_min_sharpness: float = 35.0

@@ -17,8 +17,8 @@ export type TryFitStage =
   | "done"
   | "error";
 
-export const MIN_PHOTOS = 3;
-export const MAX_PHOTOS = 5;
+export const MIN_PHOTOS = 1;
+export const MAX_PHOTOS = 3;
 
 const POLL_INTERVAL_MS = 2500;
 

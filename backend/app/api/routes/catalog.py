@@ -98,7 +98,7 @@ def get_catalog() -> dict[str, object]:
 @router.post("/generate", operation_id="generate_catalog_tryon")
 async def generate_catalog_tryon(
     background_tasks: BackgroundTasks,
-    person_images: Annotated[list[UploadFile], File(description="Upload 3 to 5 clear images of the same person")],
+    person_images: Annotated[list[UploadFile], File(description="Upload 1 to 3 clear images of the same person")],
     category: str = Form(...),
     product_number: str = Form(...),
     color: str = Form(...),
@@ -111,8 +111,8 @@ async def generate_catalog_tryon(
 ) -> dict[str, object]:
     settings = get_settings()
     log_memory("batch_start")
-    if not 3 <= len(person_images) <= 5:
-        raise HTTPException(status_code=422, detail={"code": "invalid_person_image_count", "message": "Upload a minimum of 3 and a maximum of 5 person images."})
+    if not settings.min_person_images <= len(person_images) <= settings.max_person_images:
+        raise HTTPException(status_code=422, detail={"code": "invalid_person_image_count", "message": f"Upload between {settings.min_person_images} and {settings.max_person_images} person images."})
     for upload in person_images:
         _validate_upload(upload, settings.allowed_image_types)
 

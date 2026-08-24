@@ -52,11 +52,11 @@ def analyze_catalog_product(
 
 @router.post("/person-set", operation_id="analyze_person_photo_set")
 async def analyze_person_photo_set(
-    person_images: Annotated[list[UploadFile], File(description="Upload 3 to 5 person images")],
+    person_images: Annotated[list[UploadFile], File(description="Upload 1 to 3 person images")],
 ) -> dict[str, object]:
     settings = get_settings()
     if not settings.min_person_images <= len(person_images) <= settings.max_person_images:
-        raise HTTPException(status_code=422, detail="Upload 3 to 5 person images.")
+        raise HTTPException(status_code=422, detail=f"Upload between {settings.min_person_images} and {settings.max_person_images} person images.")
     paths: list[Path] = []
     try:
         for index, upload in enumerate(person_images, start=1):

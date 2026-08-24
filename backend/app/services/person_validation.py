@@ -754,8 +754,8 @@ def _validate_configuration(
 def validate_person_images(
     paths: list[Path],
     *,
-    min_images: int = 3,
-    max_images: int = 5,
+    min_images: int = 1,
+    max_images: int = 3,
     min_width: int = 400,
     min_height: int = 600,
     min_sharpness: float = 45.0,

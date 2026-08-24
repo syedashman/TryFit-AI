@@ -28,7 +28,7 @@ export default function UploadPanel({
     <div>
       <h1 className="font-display text-[3.3rem] leading-[0.9] tracking-[-0.06em] text-[var(--tryfit-ink)]">See this look on you</h1>
       <p className="mt-3 max-w-xl text-base leading-relaxed text-[rgba(17,17,17,0.62)]">
-        Upload {MIN_PHOTOS}–{MAX_PHOTOS} clear photos of yourself and we&apos;ll generate a personalized look using the existing TryFit AI workflow.
+        Upload {MIN_PHOTOS}–{MAX_PHOTOS} clear photos. Each photo creates one Try Fit result.
       </p>
 
       <div className="mt-6 rounded-lg border border-[rgba(17,17,17,0.12)] bg-[#f8f7f4] p-5">
@@ -71,7 +71,7 @@ export default function UploadPanel({
       </div>
 
       <button disabled={!canSubmit} onClick={onGenerate} className="fabric-shimmer mt-7 w-full border border-[var(--tryfit-ink)] bg-[var(--tryfit-ink)] px-6 py-4 text-[0.7rem] font-medium uppercase tracking-[0.2em] text-[#f7f5f2] transition hover:bg-[var(--tryfit-olive)] disabled:cursor-not-allowed disabled:opacity-45">
-        Create My Try Fit →
+        Generate {fileCount} Try Fit{fileCount === 1 ? "" : "s"} →
       </button>
       {fileCount > 0 && fileCount < MIN_PHOTOS && (
         <p className="mt-2 text-xs text-[rgba(17,17,17,0.6)]">Upload at least {MIN_PHOTOS} photos to continue.</p>
