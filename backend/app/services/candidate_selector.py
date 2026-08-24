@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 
 import cv2
 import numpy as np
@@ -126,6 +127,7 @@ class NoEligibleCandidateError(ValueError):
 
 _FACE_DETECTORS: list[cv2.CascadeClassifier] | None = None
 _FACE_CROP_CACHE: dict[str, np.ndarray | None] = {}
+_FACE_DETECTOR_LOCK = threading.Lock()
 
 
 def _get_face_detectors() -> list[cv2.CascadeClassifier]:
@@ -155,16 +157,17 @@ def _crop_face(path: Path | None) -> np.ndarray | None:
     if image is None:
         return None
     faces = []
-    for detector in _get_face_detectors():
-        detected = detector.detectMultiScale(
-            image,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(24, 24),
-        )
-        if len(detected):
-            faces = detected
-            break
+    with _FACE_DETECTOR_LOCK:
+        for detector in _get_face_detectors():
+            detected = detector.detectMultiScale(
+                image,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(24, 24),
+            )
+            if len(detected):
+                faces = detected
+                break
     if len(faces) == 0:
         if len(_FACE_CROP_CACHE) > 64:
             _FACE_CROP_CACHE.clear()
