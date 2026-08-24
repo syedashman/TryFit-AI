@@ -55,8 +55,8 @@ async def analyze_person_photo_set(
     person_images: Annotated[list[UploadFile], File(description="Upload 1 to 3 person images")],
 ) -> dict[str, object]:
     settings = get_settings()
-    if not settings.min_person_images <= len(person_images) <= settings.max_person_images:
-        raise HTTPException(status_code=422, detail=f"Upload between {settings.min_person_images} and {settings.max_person_images} person images.")
+    if not settings.effective_min_person_images <= len(person_images) <= settings.effective_max_person_images:
+        raise HTTPException(status_code=422, detail="Upload between 1 and 3 person images.")
     paths: list[Path] = []
     try:
         for index, upload in enumerate(person_images, start=1):

@@ -54,13 +54,13 @@
         <aside class="upload-card">
           <p class="eyebrow">TRY FIT NOW</p><h2 id="tryonProductName">Your selected outfit</h2>
           <div class="mini-product"><img id="tryonThumb" alt="Selected outfit"/><div><b id="tryonColor"></b><span id="tryonRefs"></span></div></div>
-          <label class="upload-zone"><input id="personFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple/><span class="upload-icon">↑</span><b>Upload 3–5 photos</b><small>Use clear photos of the same person. Different person poses help produce more varied outputs.</small></label>
-          <div id="previewStrip" class="preview-strip"></div><div class="upload-row"><span id="fileCount">0 of 3–5 photos selected</span><button id="clearFiles">Clear</button></div>
+          <label class="upload-zone"><input id="personFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple/><span class="upload-icon">↑</span><b>Upload 1–3 photos</b><small>Use clear photos of the same person. Each photo creates one Try Fit result.</small></label>
+          <div id="previewStrip" class="preview-strip"></div><div class="upload-row"><span id="fileCount">0 of 1–3 photos selected</span><button id="clearFiles">Clear</button></div>
           <button id="generateBtn" class="primary-btn full" disabled>Generate Try Fit images <span id="buttonCount"></span></button><p id="formError" class="form-error"></p>
         </aside>
         <section class="results-card">
           <div class="results-head"><div><p class="eyebrow">YOUR RESULTS</p><h2 id="resultTitle">Generated images will appear here</h2></div><span id="resultCounter" class="counter hidden">0 / 0</span></div>
-          <div id="resultStage" class="result-stage empty"><div id="emptyState" class="empty-state"><span>✦</span><h3>Your Try Fit results will appear here</h3><p>Upload 3–5 photos of the same person, then generate images for your selected product color.</p></div><div id="processingState" class="processing-state hidden"><div class="spinner"></div><h3>Creating your Try Fit images</h3><p id="processingText">Preparing…</p><div class="progress"><i id="progressBar"></i></div><span id="progressLabel">0%</span></div><div id="resultsGrid" class="results-grid hidden"></div></div>
+          <div id="resultStage" class="result-stage empty"><div id="emptyState" class="empty-state"><span>✦</span><h3>Your Try Fit results will appear here</h3><p>Upload 1–3 photos of the same person, then generate images for your selected product color.</p></div><div id="processingState" class="processing-state hidden"><div class="spinner"></div><h3>Creating your Try Fit images</h3><p id="processingText">Preparing…</p><div class="progress"><i id="progressBar"></i></div><span id="progressLabel">0%</span></div><div id="resultsGrid" class="results-grid hidden"></div></div>
         </section>
       </div>
     </section>

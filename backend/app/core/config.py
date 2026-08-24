@@ -37,6 +37,14 @@ class Settings(BaseSettings):
 
     min_person_images: int = 1
     max_person_images: int = 3
+
+    @property
+    def effective_min_person_images(self) -> int:
+        return 1
+
+    @property
+    def effective_max_person_images(self) -> int:
+        return 3
     person_min_width: int = 300
     person_min_height: int = 375
     person_min_sharpness: float = 35.0

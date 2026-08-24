@@ -60,10 +60,10 @@ async def create_job(
     seed: str | None = Form(None),
 ) -> JobRecord:
     settings = get_settings()
-    if not settings.min_person_images <= len(person_images) <= settings.max_person_images:
+    if not settings.effective_min_person_images <= len(person_images) <= settings.effective_max_person_images:
         raise HTTPException(status_code=422, detail={
             "code": "invalid_person_image_count",
-            "message": f"Upload between {settings.min_person_images} and {settings.max_person_images} person images.",
+            "message": "Upload between 1 and 3 person images.",
             "received": len(person_images),
         })
 
@@ -107,8 +107,8 @@ async def create_job(
     selected_cloth_type = cloth_type or settings.hf_cloth_type
     report = validate_person_images(
         person_paths,
-        min_images=settings.min_person_images,
-        max_images=settings.max_person_images,
+        min_images=settings.effective_min_person_images,
+        max_images=settings.effective_max_person_images,
         min_width=settings.person_min_width,
         min_height=settings.person_min_height,
         min_sharpness=settings.person_min_sharpness,
@@ -178,8 +178,8 @@ async def create_job(
 def get_commercial_config() -> dict[str, object]:
     settings = get_settings()
     return {
-        "minimum_person_images": settings.min_person_images,
-        "maximum_person_images": settings.max_person_images,
+        "minimum_person_images": settings.effective_min_person_images,
+        "maximum_person_images": settings.effective_max_person_images,
         "accepted_image_types": settings.allowed_image_types,
         "technical_parameters_hidden": True,
         "quality_threshold": settings.commercial_quality_threshold,

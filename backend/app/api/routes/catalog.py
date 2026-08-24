@@ -111,8 +111,8 @@ async def generate_catalog_tryon(
 ) -> dict[str, object]:
     settings = get_settings()
     log_memory("batch_start")
-    if not settings.min_person_images <= len(person_images) <= settings.max_person_images:
-        raise HTTPException(status_code=422, detail={"code": "invalid_person_image_count", "message": f"Upload between {settings.min_person_images} and {settings.max_person_images} person images."})
+    if not settings.effective_min_person_images <= len(person_images) <= settings.effective_max_person_images:
+        raise HTTPException(status_code=422, detail={"code": "invalid_person_image_count", "message": "Upload between 1 and 3 person images."})
     for upload in person_images:
         _validate_upload(upload, settings.allowed_image_types)
 
@@ -183,8 +183,8 @@ async def generate_catalog_tryon(
     validation_started = time.perf_counter()
     report = validate_person_images(
         person_paths,
-        min_images=settings.min_person_images,
-        max_images=settings.max_person_images,
+        min_images=settings.effective_min_person_images,
+        max_images=settings.effective_max_person_images,
         min_width=settings.person_min_width,
         min_height=settings.person_min_height,
         min_sharpness=settings.person_min_sharpness,

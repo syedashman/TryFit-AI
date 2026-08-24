@@ -26,6 +26,10 @@ async def lifespan(app: FastAPI):
         f"debug_dumps={settings.effective_debug_image_dumps}"
     )
     print(
+        f"[TRYFIT UPLOAD CONFIG] min_person_images={settings.effective_min_person_images} "
+        f"max_person_images={settings.effective_max_person_images}"
+    )
+    print(
         f"[STARTUP] storage={settings.storage_dir} "
         f"workers={settings.effective_concurrency} "
         f"fast_mode={settings.tryfit_fast_mode}"
