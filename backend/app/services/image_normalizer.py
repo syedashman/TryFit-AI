@@ -14,7 +14,7 @@ LOGGER = logging.getLogger(__name__)
 def is_provider_normalized(source: Path) -> bool:
     """Return whether a path is an artifact produced for provider reuse."""
     path = Path(source)
-    return path.parent.name == "normalized" and path.suffix.lower() == ".png"
+    return path.parent.name == "normalized" and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
 
 
 def normalize_for_provider(

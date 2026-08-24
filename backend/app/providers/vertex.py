@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 import os
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from PIL import Image
 
 from app.core.config import Settings
 from app.providers.base import (
@@ -457,22 +459,32 @@ class VertexTryOnProvider(VTONProvider):
                 request.geometry_reference_image
             )
 
+        provider_format = self.settings.provider_image_format
+        max_dim = self.settings.effective_max_image_dimension
+
         decode_resize_started = time.perf_counter()
         person = normalize_for_provider(
             render_source,
             normalized_dir,
-            output_format="PNG",
+            output_format=provider_format,
+            max_dimension=max_dim,
         )
 
         garment = normalize_for_provider(
             request.garment_image,
             normalized_dir,
-            output_format="PNG",
+            output_format=provider_format,
+            max_dimension=max_dim,
         )
         print(
             f"[PERF] job={request.job_id} decode_resize="
             f"{time.perf_counter() - decode_resize_started:.2f}s"
         )
+
+        with Image.open(person) as p_img:
+            person_width, person_height = p_img.size
+        with Image.open(garment) as g_img:
+            garment_width, garment_height = g_img.size
 
         print(
             "[JOB IDENTITY TRACE]",
@@ -509,6 +521,8 @@ class VertexTryOnProvider(VTONProvider):
             garment,
             candidate_count,
         )
+        payload_bytes = len(json.dumps(payload).encode("utf-8"))
+        payload_mb = round(payload_bytes / (1024 * 1024), 2)
 
         response: httpx.Response | None = None
         attempts = (
@@ -625,9 +639,11 @@ class VertexTryOnProvider(VTONProvider):
                 "no response."
             )
 
+        vertex_request_seconds = time.perf_counter() - vertex_request_started
+        round_number = getattr(request, "attempt_index", 0) + 1
         print(
             f"[PERF] job={request.job_id} vertex_request="
-            f"{time.perf_counter() - vertex_request_started:.2f}s "
+            f"{vertex_request_seconds:.2f}s "
             f"provider_calls={attempt + 1}"
         )
 
@@ -679,6 +695,16 @@ class VertexTryOnProvider(VTONProvider):
                 )
             )
 
+        print(
+            f"[VERTEX PERF] job={request.job_id} round={round_number} "
+            f"sample_count={candidate_count} "
+            f"person_dimensions={person_width}x{person_height} "
+            f"garment_dimensions={garment_width}x{garment_height} "
+            f"payload_mb={payload_mb:.2f} "
+            f"request_seconds={vertex_request_seconds:.2f} "
+            f"response_candidates={len(candidate_paths)}"
+        )
+
         # Use exact normalized image sent to Vertex.
         render_reference_profile = (
             build_body_geometry_profile(person)
@@ -689,20 +715,20 @@ class VertexTryOnProvider(VTONProvider):
             or render_source
         )
 
-        full_body_reference = (
-            normalize_for_provider(
+        if full_body_reference_path.resolve() == person.resolve():
+            full_body_reference_profile = render_reference_profile
+        else:
+            full_body_reference = normalize_for_provider(
                 full_body_reference_path,
                 normalized_dir,
-                output_format="PNG",
+                output_format=provider_format,
+                max_dimension=max_dim,
             )
-        )
-
-        full_body_reference_profile = (
-            build_body_geometry_profile(
+            full_body_reference_profile = build_body_geometry_profile(
                 full_body_reference
             )
-        )
         chosen_path = candidate_paths[0]
+        candidate_validation_seconds = 0.0
         candidate_scores: list[
             dict[str, Any]
         ] = []
@@ -718,7 +744,17 @@ class VertexTryOnProvider(VTONProvider):
                     identity_reference_path=person,
                     catalog_identity_reference_path=garment,
                 )
+                eligible_count = sum(1 for s in scores if not s.hard_rejected) if scores else 1
+                action = "accept" if eligible_count > 0 else "regenerate"
+                print(
+                    f"[QUALITY ROUND] job={request.job_id} round={round_number} "
+                    f"eligible_candidates={eligible_count} action={action}"
+                )
             except NoEligibleCandidateError as exc:
+                print(
+                    f"[QUALITY ROUND] job={request.job_id} round={round_number} "
+                    f"eligible_candidates=0 action=regenerate"
+                )
                 for score in exc.scores:
                     print(
                         "CANDIDATE",
@@ -762,15 +798,16 @@ class VertexTryOnProvider(VTONProvider):
                         else "distorted_tryon_result"
                     ),
                     provider="vertex",
-                    retryable=True,
+                    retryable=False,
                     details={
                         "candidate_scores": [score.to_dict() for score in exc.scores],
                     },
                 ) from exc
             finally:
+                candidate_validation_seconds = time.perf_counter() - validation_started
                 print(
                     f"[PERF] job={request.job_id} candidate_validation="
-                    f"{time.perf_counter() - validation_started:.2f}s "
+                    f"{candidate_validation_seconds:.2f}s "
                     f"candidate_count={len(candidate_paths)}"
                 )
 
@@ -972,6 +1009,11 @@ class VertexTryOnProvider(VTONProvider):
                 },
             )
 
+        if not self.settings.debug_image_dumps:
+            for candidate_path in candidate_paths:
+                if candidate_path != chosen_path:
+                    candidate_path.unlink(missing_ok=True)
+
         return TryOnResult(
             image_path=chosen_path,
             raw={
@@ -984,6 +1026,14 @@ class VertexTryOnProvider(VTONProvider):
                     .google_cloud_location,
                 "sample_count":
                     int(candidate_count),
+                "vertex_request_seconds": round(
+                    vertex_request_seconds,
+                    2,
+                ),
+                "candidate_validation_seconds": round(
+                    candidate_validation_seconds,
+                    2,
+                ),
                 "geometry_selection_enabled":
                     bool(
                         self.settings

@@ -11,16 +11,25 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.services.job_scheduler import job_scheduler
 from app.services.storage import ensure_storage
+from app.services.memory_metrics import log_memory
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     print(
+        f"[TRYFIT CONFIG] fast_mode={settings.tryfit_fast_mode} "
+        f"provider_long_side={settings.effective_max_image_dimension} "
+        f"candidate_count={settings.vertex_candidate_count} "
+        f"concurrency={settings.max_concurrent_jobs} "
+        f"max_rounds={settings.effective_max_generation_rounds}"
+    )
+    print(
         f"[STARTUP] storage={settings.storage_dir} "
         f"workers={settings.max_concurrent_jobs} "
         f"fast_mode={settings.tryfit_fast_mode}"
     )
+    log_memory("startup")
     ensure_storage(settings)
     job_scheduler.configure(max_workers=max(1, min(settings.max_concurrent_jobs, 3)))
     try:

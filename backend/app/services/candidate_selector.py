@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,8 +13,10 @@ from app.services.body_geometry import (
     geometry_similarity,
 )
 from app.services.phase3c2_quality import (
+    GarmentQualityProfile,
     garment_color_similarity,
     garment_structure_metrics,
+    get_garment_quality_profile,
 )
 
 # Neutral fallback used when a validation signal cannot be computed. A failed
@@ -122,51 +124,76 @@ class NoEligibleCandidateError(ValueError):
         super().__init__("No eligible candidate passed the quality gates.")
 
 
-def _face_identity_signal(
-    reference_path: Path,
-    candidate_path: Path,
+_FACE_DETECTORS: list[cv2.CascadeClassifier] | None = None
+_FACE_CROP_CACHE: dict[str, np.ndarray | None] = {}
+
+
+def _get_face_detectors() -> list[cv2.CascadeClassifier]:
+    global _FACE_DETECTORS
+    if _FACE_DETECTORS is None:
+        _FACE_DETECTORS = [
+            cv2.CascadeClassifier(
+                str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+            ),
+            cv2.CascadeClassifier(
+                str(Path(cv2.data.haarcascades) / "haarcascade_profileface.xml")
+            ),
+        ]
+    return _FACE_DETECTORS
+
+
+def _crop_face(path: Path | None) -> np.ndarray | None:
+    if path is None:
+        return None
+    path_obj = Path(path)
+    key = str(path_obj.resolve()) if path_obj.exists() else str(path_obj)
+    if key in _FACE_CROP_CACHE:
+        return _FACE_CROP_CACHE[key]
+    if not path_obj.exists() or not path_obj.is_file():
+        return None
+    image = cv2.imread(str(path_obj), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        return None
+    faces = []
+    for detector in _get_face_detectors():
+        detected = detector.detectMultiScale(
+            image,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(24, 24),
+        )
+        if len(detected):
+            faces = detected
+            break
+    if len(faces) == 0:
+        if len(_FACE_CROP_CACHE) > 64:
+            _FACE_CROP_CACHE.clear()
+        _FACE_CROP_CACHE[key] = None
+        return None
+    x, y, width, height = max(faces, key=lambda item: item[2] * item[3])
+    padding_x = int(width * 0.45)
+    padding_y = int(height * 0.65)
+    left = max(0, x - padding_x)
+    top = max(0, y - padding_y)
+    right = min(image.shape[1], x + width + padding_x)
+    bottom = min(image.shape[0], y + height + padding_y)
+    crop = image[top:bottom, left:right]
+    if crop.size == 0:
+        if len(_FACE_CROP_CACHE) > 64:
+            _FACE_CROP_CACHE.clear()
+        _FACE_CROP_CACHE[key] = None
+        return None
+    result = cv2.resize(crop, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
+    if len(_FACE_CROP_CACHE) > 64:
+        _FACE_CROP_CACHE.clear()
+    _FACE_CROP_CACHE[key] = result
+    return result
+
+
+def _compare_cropped_faces(
+    reference: np.ndarray | None,
+    candidate: np.ndarray | None,
 ) -> tuple[float, bool]:
-    """Compare detected head regions without treating missing detections as failure."""
-    detectors = [
-        cv2.CascadeClassifier(
-            str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
-        ),
-        cv2.CascadeClassifier(
-            str(Path(cv2.data.haarcascades) / "haarcascade_profileface.xml")
-        ),
-    ]
-
-    def crop_face(path: Path) -> np.ndarray | None:
-        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-        if image is None:
-            return None
-        faces = []
-        for detector in detectors:
-            detected = detector.detectMultiScale(
-                image,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(24, 24),
-            )
-            if len(detected):
-                faces = detected
-                break
-        if len(faces) == 0:
-            return None
-        x, y, width, height = max(faces, key=lambda item: item[2] * item[3])
-        padding_x = int(width * 0.45)
-        padding_y = int(height * 0.65)
-        left = max(0, x - padding_x)
-        top = max(0, y - padding_y)
-        right = min(image.shape[1], x + width + padding_x)
-        bottom = min(image.shape[0], y + height + padding_y)
-        crop = image[top:bottom, left:right]
-        if crop.size == 0:
-            return None
-        return cv2.resize(crop, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
-
-    reference = crop_face(reference_path)
-    candidate = crop_face(candidate_path)
     if reference is None or candidate is None:
         return 0.5, False
 
@@ -191,6 +218,14 @@ def _face_identity_signal(
     )
     similarity = 0.35 * pixel_similarity + 0.65 * edge_similarity
     return max(0.0, min(1.0, (similarity + 1.0) / 2.0)), True
+
+
+def _face_identity_signal(
+    reference_path: Path,
+    candidate_path: Path,
+) -> tuple[float, bool]:
+    """Compare detected head regions without treating missing detections as failure."""
+    return _compare_cropped_faces(_crop_face(reference_path), _crop_face(candidate_path))
 
 
 def _hard_reject(
@@ -260,6 +295,10 @@ def choose_best_candidate(
         Path(path)
         for path in candidate_paths
     ]
+
+    ref_face = _crop_face(identity_reference_path) if identity_reference_path else None
+    cat_face = _crop_face(catalog_identity_reference_path) if catalog_identity_reference_path else None
+    garment_profile = get_garment_quality_profile(garment_reference_path) if garment_reference_path else None
 
     scores: list[CandidateScore] = []
 
@@ -350,11 +389,11 @@ def choose_best_candidate(
             # A validator failure must NOT become a perfect score. Fall back to
             # a neutral 0.5 and record the failure for debugging.
             color_score = 1.0
-            if garment_reference_path is not None:
+            if garment_profile is not None:
                 try:
                     color_score = float(
                         garment_color_similarity(
-                            garment_reference_path,
+                            garment_profile,
                             path,
                         )
                     )
@@ -373,10 +412,10 @@ def choose_best_candidate(
             long_garment_violation = False
             long_garment_confidence = 0.0
             semantic_fidelity: dict[str, object] | None = None
-            if garment_reference_path is not None:
+            if garment_profile is not None:
                 try:
                     metrics = garment_structure_metrics(
-                        garment_reference_path,
+                        garment_profile,
                         path,
                     )
                     structure_score = float(
@@ -393,8 +432,6 @@ def choose_best_candidate(
                     long_garment_confidence = float(
                         metrics.get("confidence", 0.0)
                     )
-                    # Keep the raw garment-fidelity signals so the field is
-                    # observable in the API/debug payload rather than unused.
                     semantic_fidelity = {
                         "structure_score": structure_score,
                         "length_score": length_score,

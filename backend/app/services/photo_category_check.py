@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import mimetypes
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from PIL import Image
 
 from app.core.config import Settings
 
@@ -64,9 +66,20 @@ def _access_token(settings: Settings) -> str:
 
 
 def _encode_image(path: Path) -> tuple[str, str]:
-    mime_type = mimetypes.guess_type(str(path))[0] or "image/jpeg"
-    data = base64.b64encode(path.read_bytes()).decode("utf-8")
-    return mime_type, data
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            if max(img.size) > 512:
+                scale = 512 / max(img.size)
+                img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.Resampling.BILINEAR)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=85)
+            data = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            return "image/jpeg", data
+    except Exception:
+        mime_type = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+        data = base64.b64encode(path.read_bytes()).decode("utf-8")
+        return mime_type, data
 
 
 def _build_prompt(category: str) -> str:

@@ -19,6 +19,7 @@ from app.services.job_scheduler import job_scheduler
 from app.services.person_validation import validate_person_images
 from app.services.photo_category_check import check_photos_match_category
 from app.services.storage import list_jobs, load_job, save_job, save_upload
+from app.services.memory_metrics import log_memory, memory_snapshot
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 QualityPreset = Literal["fast", "balanced", "high"]
@@ -109,6 +110,7 @@ async def generate_catalog_tryon(
     seed: str | None = Form(None),
 ) -> dict[str, object]:
     settings = get_settings()
+    log_memory("batch_start")
     if not 3 <= len(person_images) <= 5:
         raise HTTPException(status_code=422, detail={"code": "invalid_person_image_count", "message": "Upload a minimum of 3 and a maximum of 5 person images."})
     for upload in person_images:
@@ -138,24 +140,37 @@ async def generate_catalog_tryon(
     parsed_guidance = _optional_float(guidance_scale, "guidance_scale")
     parsed_seed = _optional_int(seed, "seed")
     preset = settings.quality_preset(quality_preset)
-    normalization_started = time.perf_counter()
-    normalized_dir = settings.storage_dir / "normalized"
-    max_dimension = 1024 if settings.tryfit_fast_mode else settings.provider_max_image_dimension
 
-    person_paths: list[Path] = []
+    upload_started = time.perf_counter()
+    raw_upload_paths: list[Path] = []
     try:
         for index, upload in enumerate(person_images, start=1):
             uploaded_path = await save_upload(upload, settings, f"person_{index}")
-            person_paths.append(uploaded_path)
+            raw_upload_paths.append(uploaded_path)
+    except Exception as exc:
+        for path in raw_upload_paths:
+            path.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    upload_elapsed = time.perf_counter() - upload_started
+
+    normalization_started = time.perf_counter()
+    normalized_dir = settings.storage_dir / "normalized"
+    max_dimension = settings.effective_max_image_dimension
+    provider_format = settings.provider_image_format
+
+    person_paths: list[Path] = []
+    try:
+        for uploaded_path in raw_upload_paths:
             normalized_path = normalize_for_provider(
                 uploaded_path,
                 normalized_dir,
+                output_format=provider_format,
                 min_width=settings.person_min_width,
                 min_height=settings.person_min_height,
                 max_dimension=max_dimension,
             )
             uploaded_path.unlink(missing_ok=True)
-            person_paths[-1] = normalized_path
+            person_paths.append(normalized_path)
     except ValueError as exc:
         for path in person_paths:
             path.unlink(missing_ok=True)
@@ -163,6 +178,7 @@ async def generate_catalog_tryon(
 
     decode_resize_elapsed = time.perf_counter() - normalization_started
     print(f"[PERF] batch preprocessing decode_resize={decode_resize_elapsed:.2f}s")
+    log_memory("after_upload_normalization")
 
     validation_started = time.perf_counter()
     report = validate_person_images(
@@ -180,11 +196,13 @@ async def generate_catalog_tryon(
         for path in person_paths:
             path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail={"code": "person_images_rejected", "message": "Person image validation failed.", "validation": report.to_dict()})
-    print(f"[PERF] batch person_validation={time.perf_counter() - validation_started:.2f}s")
+    validation_elapsed = time.perf_counter() - validation_started
+    print(f"[PERF] batch person_validation={validation_elapsed:.2f}s")
 
     category_started = time.perf_counter()
     category_ok, category_error = check_photos_match_category(settings, person_paths, category_name)
-    print(f"[PERF] batch category_validation={time.perf_counter() - category_started:.2f}s")
+    category_elapsed = time.perf_counter() - category_started
+    print(f"[PERF] batch category_validation={category_elapsed:.2f}s")
     if not category_ok:
         for path in person_paths:
             path.unlink(missing_ok=True)
@@ -196,7 +214,8 @@ async def generate_catalog_tryon(
         geometry_index = report.selected_index or 0
     geometry_started = time.perf_counter()
     person_geometry_profiles = [build_body_geometry_profile(path) for path in person_paths]
-    print(f"[PERF] batch geometry_analysis={time.perf_counter() - geometry_started:.2f}s")
+    geometry_elapsed = time.perf_counter() - geometry_started
+    print(f"[PERF] batch geometry_analysis={geometry_elapsed:.2f}s")
     geometry_profile = person_geometry_profiles[geometry_index]
 
     best_matched_person_index = geometry_index
@@ -206,12 +225,13 @@ async def generate_catalog_tryon(
     garment_path = normalize_for_provider(
         primary_garment_path,
         normalized_dir,
-        output_format="PNG",
+        output_format=provider_format,
         max_dimension=max_dimension,
     )
     garment_started = time.perf_counter()
     analysis = analyze_garment(garment_path, garment_description, cloth_type)
-    print(f"[PERF] batch garment_analysis={time.perf_counter() - garment_started:.2f}s cached=true")
+    garment_elapsed = time.perf_counter() - garment_started
+    print(f"[PERF] batch garment_analysis={garment_elapsed:.2f}s cached=true")
     base_seed = parsed_seed if parsed_seed is not None else settings.hf_seed
 
     batch_id = uuid4().hex
@@ -268,6 +288,12 @@ async def generate_catalog_tryon(
                 "age_neutral_validation": True,
                 "product_integrity_lock": True,
                 "selected_color_only": True,
+                "upload_ms": round(upload_elapsed * 1000, 1),
+                "normalize_ms": round(decode_resize_elapsed * 1000, 1),
+                "person_validation_ms": round(validation_elapsed * 1000, 1),
+                "gemini_ms": round(category_elapsed * 1000, 1),
+                "geometry_ms": round(geometry_elapsed * 1000, 1),
+                "garment_analysis_ms": round(garment_elapsed * 1000, 1),
             },
         )
         save_job(record, settings)
@@ -353,11 +379,21 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
         for item in jobs
     )
     if all_finished:
+        log_memory("batch_complete")
+        current_rss, peak_rss = memory_snapshot()
+        first_res_ms = (first_result_seconds * 1000) if first_result_seconds is not None else 0.0
+        all_res_ms = (all_results_seconds * 1000) if all_results_seconds is not None else 0.0
+        quality_rounds_total = sum(
+            int((item.provider_metadata or {}).get("generation_rounds", 1))
+            for item in jobs
+        )
         print(
-            f"[PERF BATCH] jobs={total} concurrency={settings.max_concurrent_jobs} "
-            f"first_result_seconds={first_result_seconds} "
-            f"all_results_seconds={all_results_seconds} "
-            f"vertex_calls_total={vertex_calls_total}"
+            f"[PERF BATCH] batch={batch_id} "
+            f"first_result_ms={first_res_ms:.1f} "
+            f"all_results_ms={all_res_ms:.1f} "
+            f"vertex_calls={vertex_calls_total} "
+            f"quality_rounds={quality_rounds_total} "
+            f"peak_rss_mb={peak_rss:.1f}"
         )
     return {
         "batch_id": batch_id,

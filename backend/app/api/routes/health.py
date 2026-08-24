@@ -18,6 +18,7 @@ def health() -> dict[str, object]:
         "provider": settings.vton_provider,
         "release": "Sprint 4 Phase 3B V2",
         "catalog_batch_generation": True,
+        "debug_image_dumps": settings.debug_image_dumps,
         "age_neutral_application_validation": True,
     }
 

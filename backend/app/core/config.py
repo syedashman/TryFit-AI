@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 2
     tryfit_fast_mode: bool = False
     provider_max_image_dimension: int = 1536
+    max_provider_long_side: int | None = None
+    provider_image_format: str = "JPEG"
+    debug_image_dumps: bool = False
 
     # Safe watchdog for generation jobs that get stuck in queued/processing.
     # This must be comfortably above provider request timeouts so legitimate
@@ -100,7 +103,7 @@ class Settings(BaseSettings):
     vertex_sample_count: int = 1
     vertex_storage_uri: str | None = None
     vertex_request_timeout_seconds: float = 180.0
-    vertex_max_retries: int = 2
+    vertex_max_retries: int = 1
     vertex_retry_backoff_seconds: float = 1.0
     vertex_candidate_count: int = 3
     geometry_selection_enabled: bool = True
@@ -671,6 +674,20 @@ class Settings(BaseSettings):
                 "Unknown quality preset. "
                 "Use fast, balanced, or high."
             ) from exc
+
+    @property
+    def effective_max_image_dimension(self) -> int:
+        if self.max_provider_long_side is not None:
+            return self.max_provider_long_side
+        return 1024 if self.tryfit_fast_mode else self.provider_max_image_dimension
+
+    @property
+    def effective_candidate_count(self) -> int:
+        return self.vertex_candidate_count
+
+    @property
+    def effective_max_generation_rounds(self) -> int:
+        return 1 if self.tryfit_fast_mode else self.commercial_max_generation_rounds
 
     @property
     def jobs_dir(self) -> Path:

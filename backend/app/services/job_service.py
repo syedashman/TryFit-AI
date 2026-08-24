@@ -23,6 +23,7 @@ from app.services.storage import (
     save_job,
     list_jobs,
 )
+from app.services.memory_metrics import log_memory
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +245,7 @@ def process_job(
         return
 
     print(f"[JOB] process_job entered job={job_id} status={record.status}")
+    log_memory(f"before_vertex job={job_id}")
     logger.info("[JOB] process_job entered job=%s status=%s", job_id, record.status)
 
     record.status = "processing"
@@ -353,6 +355,7 @@ def process_job(
             if record.cloth_type in {"overall", "lower"}:
                 request.geometry_reference_image = render_person
             request.seed = seed + attempt_index * 97
+            request.attempt_index = attempt_index
 
             logger.info(
                 "VTON ROUND %s/%s",
@@ -372,6 +375,7 @@ def process_job(
                 round_started = time.perf_counter()
                 print(f"[PERF] job={job_id} vertex_round_{attempt_index + 1}_start")
                 result = provider.generate(request)
+                log_memory(f"after_vertex job={job_id}")
                 print(
                     f"[PERF] job={job_id} vertex_round_{attempt_index + 1}_end "
                     f"duration={time.perf_counter() - round_started:.2f}s"
@@ -417,11 +421,14 @@ def process_job(
         final_path: Path | None = None
 
         if result.image_path is not None:
+            provider_result_path = Path(result.image_path)
             final_path = _copy_result_file(
-                Path(result.image_path),
+                provider_result_path,
                 job_id,
                 settings,
             )
+            if not settings.debug_image_dumps:
+                provider_result_path.unlink(missing_ok=True)
 
         if (
             final_path is None
@@ -479,6 +486,7 @@ def process_job(
             settings
             .commercial_quality_threshold,
         )
+        log_memory(f"after_candidate_processing job={job_id}")
 
         record.status = "completed"
         record.message = (
@@ -603,12 +611,48 @@ def process_job(
 
     finally:
         total_elapsed = time.perf_counter() - job_started
+        meta = record.provider_metadata if isinstance(record.provider_metadata, dict) else {}
+        upload_ms = float(meta.get("upload_ms", 0.0))
+        normalize_ms = float(meta.get("normalize_ms", 0.0))
+        person_validation_ms = float(meta.get("person_validation_ms", 0.0))
+        gemini_ms = float(meta.get("gemini_ms", 0.0))
+        geometry_ms = float(meta.get("geometry_ms", 0.0))
+        garment_analysis_ms = float(meta.get("garment_analysis_ms", 0.0))
+        decode_ms = float(meta.get("decode_ms", 0.0))
+        vertex_ms = float(meta.get("vertex_request_seconds", 0.0)) * 1000.0
+        candidate_decode_ms = float(meta.get("candidate_decode_ms", 0.0))
+        candidate_validation_ms = float(meta.get("candidate_validation_seconds", 0.0)) * 1000.0
+        identity_validation_ms = float(meta.get("identity_validation_ms", 0.0))
+        garment_validation_ms = float(meta.get("garment_validation_ms", 0.0))
+        candidate_selection_ms = candidate_validation_ms
+        cleanup_ms = max(0.0, (total_elapsed - queue_wait) * 1000.0 - vertex_ms - candidate_validation_ms)
+
+        print(
+            f"[PERF DETAIL] "
+            f"job={job_id} "
+            f"queue_wait_ms={queue_wait * 1000:.1f} "
+            f"upload_ms={upload_ms:.1f} "
+            f"decode_ms={decode_ms:.1f} "
+            f"normalize_ms={normalize_ms:.1f} "
+            f"person_validation_ms={person_validation_ms:.1f} "
+            f"geometry_ms={geometry_ms:.1f} "
+            f"garment_analysis_ms={garment_analysis_ms:.1f} "
+            f"gemini_ms={gemini_ms:.1f} "
+            f"vertex_ms={vertex_ms:.1f} "
+            f"candidate_decode_ms={candidate_decode_ms:.1f} "
+            f"identity_validation_ms={identity_validation_ms:.1f} "
+            f"garment_validation_ms={garment_validation_ms:.1f} "
+            f"candidate_selection_ms={candidate_selection_ms:.1f} "
+            f"cleanup_ms={cleanup_ms:.1f} "
+            f"total_ms={total_elapsed * 1000:.1f}"
+        )
         print(
             f"[PERF] job={job_id} total_job={total_elapsed:.2f}s "
             f"queue_wait={queue_wait:.2f}s "
             f"provider_calls={locals().get('provider_calls', 0)} "
             f"retry_count={max(0, locals().get('provider_calls', 0) - 1)}"
         )
+        log_memory(f"after_job_cleanup job={job_id}")
         try:
             save_job(
                 record,

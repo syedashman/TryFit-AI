@@ -279,11 +279,19 @@ def _infer_category(
     )
 
 
+_GARMENT_ANALYSIS_CACHE: dict[tuple[str, str, str], GarmentAnalysis] = {}
+
+
 def analyze_garment(
     path: Path,
     description: str,
     requested_cloth_type: str,
 ) -> GarmentAnalysis:
+    resolved_path = str(Path(path).resolve())
+    cache_key = (resolved_path, description, requested_cloth_type)
+    if cache_key in _GARMENT_ANALYSIS_CACHE:
+        return _GARMENT_ANALYSIS_CACHE[cache_key]
+
     pixels = _load_pixels(
         Path(path)
     )
@@ -299,7 +307,7 @@ def analyze_garment(
         )
     )
 
-    return GarmentAnalysis(
+    result = GarmentAnalysis(
         dominant_color_rgb=dominant_rgb,
         dominant_color_name=_color_name(
             dominant_rgb
@@ -314,3 +322,7 @@ def analyze_garment(
             4,
         ),
     )
+    if len(_GARMENT_ANALYSIS_CACHE) > 32:
+        _GARMENT_ANALYSIS_CACHE.clear()
+    _GARMENT_ANALYSIS_CACHE[cache_key] = result
+    return result

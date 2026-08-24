@@ -1,11 +1,49 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 from PIL import Image
+
+
+@dataclass(slots=True)
+class GarmentQualityProfile:
+    path: str
+    garment_mean_hsv: np.ndarray
+    reference_bbox: dict[str, float] | None
+    target_rgb: np.ndarray | None
+
+
+_GARMENT_PROFILE_CACHE: dict[str, GarmentQualityProfile] = {}
+
+
+def get_garment_quality_profile(garment: Path | str | GarmentQualityProfile) -> GarmentQualityProfile:
+    if isinstance(garment, GarmentQualityProfile):
+        return garment
+    key = str(Path(garment).resolve())
+    if key in _GARMENT_PROFILE_CACHE:
+        return _GARMENT_PROFILE_CACHE[key]
+
+    garment_rgb = _rgb(Path(garment))
+    garment_pixels = _garment_pixels(garment_rgb)
+    garment_hsv = cv2.cvtColor(garment_pixels.reshape(1, -1, 3), cv2.COLOR_RGB2HSV).astype(np.float32)
+    garment_mean_hsv = garment_hsv.reshape(-1, 3).mean(axis=0)
+    target_rgb = garment_pixels.reshape(-1, 3).astype(np.float32).mean(axis=0)
+    reference_bbox = _bbox_metrics(_foreground_mask(garment_rgb))
+
+    profile = GarmentQualityProfile(
+        path=key,
+        garment_mean_hsv=garment_mean_hsv,
+        reference_bbox=reference_bbox,
+        target_rgb=target_rgb,
+    )
+    if len(_GARMENT_PROFILE_CACHE) > 32:
+        _GARMENT_PROFILE_CACHE.clear()
+    _GARMENT_PROFILE_CACHE[key] = profile
+    return profile
 
 
 def _rgb(path: Path, size: tuple[int, int] = (256, 256)) -> np.ndarray:
@@ -67,25 +105,21 @@ def _garment_pixels(image: np.ndarray) -> np.ndarray:
     return garment_pixels.astype(np.uint8)
 
 
-def garment_color_similarity(garment_path: Path, result_path: Path) -> float:
+def garment_color_similarity(garment: Path | str | GarmentQualityProfile, result_path: Path) -> float:
     """Estimate outfit color preservation by comparing garment-only pixels
     (background subtracted) between the reference garment photo and the
     generated result, so a wrong-color swap (e.g. black vs white) is
     reliably detected regardless of how much of the frame is background."""
-    garment = _rgb(garment_path)
+    profile = get_garment_quality_profile(garment)
     result = _rgb(result_path)
 
-    garment_pixels = _garment_pixels(garment)
     result_pixels = _garment_pixels(result)
-
-    garment_hsv = cv2.cvtColor(garment_pixels.reshape(1, -1, 3), cv2.COLOR_RGB2HSV).astype(np.float32)
     result_hsv = cv2.cvtColor(result_pixels.reshape(1, -1, 3), cv2.COLOR_RGB2HSV).astype(np.float32)
-    garment_mean = garment_hsv.reshape(-1, 3).mean(axis=0)
     result_mean = result_hsv.reshape(-1, 3).mean(axis=0)
 
-    hue_delta = min(abs(float(garment_mean[0] - result_mean[0])), 180.0 - abs(float(garment_mean[0] - result_mean[0]))) / 90.0
-    sat_delta = abs(float(garment_mean[1] - result_mean[1])) / 255.0
-    val_delta = abs(float(garment_mean[2] - result_mean[2])) / 255.0
+    hue_delta = min(abs(float(profile.garment_mean_hsv[0] - result_mean[0])), 180.0 - abs(float(profile.garment_mean_hsv[0] - result_mean[0]))) / 90.0
+    sat_delta = abs(float(profile.garment_mean_hsv[1] - result_mean[1])) / 255.0
+    val_delta = abs(float(profile.garment_mean_hsv[2] - result_mean[2])) / 255.0
 
     # Brightness (value) carries most of the signal for neutral garments
     # (black/white/grey), where hue is unreliable/near-random.
@@ -136,7 +170,7 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
 
 
 def garment_structure_metrics(
-    garment_path: Path,
+    garment: Path | str | GarmentQualityProfile,
     result_path: Path,
 ) -> dict[str, Any]:
     """Conservative structural validation signal for garment fidelity.
@@ -169,16 +203,15 @@ def garment_structure_metrics(
         "length_ratio": 1.0,
     }
 
-    garment = _rgb(garment_path)
-    result = _rgb(result_path)
-
-    reference = _bbox_metrics(_foreground_mask(garment))
-    if reference is None:
+    profile = get_garment_quality_profile(garment)
+    if profile.reference_bbox is None or profile.target_rgb is None:
         return neutral
 
+    result = _rgb(result_path)
+    reference = profile.reference_bbox
+
     # Dominant garment color, used to locate the garment on the generated body.
-    garment_pixels = _garment_pixels(garment)
-    target_rgb = garment_pixels.reshape(-1, 3).astype(np.float32).mean(axis=0)
+    target_rgb = profile.target_rgb
     candidate = _bbox_metrics(_color_region_mask(result, target_rgb))
     if candidate is None:
         # Could not confidently locate the garment on the result; stay neutral.

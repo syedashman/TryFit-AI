@@ -22,6 +22,7 @@ class TryOnRequest:
     commercial_instructions: str | None = None
     job_id: str | None = None
     slot_index: int | None = None
+    attempt_index: int = 0
 
     def __post_init__(self) -> None:
         self.person_image = Path(

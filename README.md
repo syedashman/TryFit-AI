@@ -190,3 +190,20 @@ enhancement. It does not disable identity, severe distortion, or garment
 fidelity gates. The default remains conservative: 1536px provider cap, up to
 two quality rounds, and two concurrent jobs. Set `MAX_CONCURRENT_JOBS=3` only
 after confirming Render resources and Vertex quota support it.
+
+Memory diagnostics use the process RSS API available on the host and print
+current and peak values without logging image bytes. `DEBUG_IMAGE_DUMPS=false`
+is the production default; no additional debug image copies should be enabled
+on Render unless investigating a specific provider response.
+
+After the memory instrumentation patch, two complete live runs using the same
+Women product `1` and three fixed sample uploads measured sampled peak RSS and
+first/all-result times of `385.1MB / 233.45s / 323.22s` and
+`562.1MB / 178.76s / 245.84s`. Both used concurrency `2` and candidate count
+`3`; each completed batch made three provider calls, with one or two quality
+rounds per slot. A third submission was malformed by the local PowerShell
+terminal before reaching the backend, so it has no valid timing. These runs
+did not meet the desired latency target, and no Render restart was observed
+during the completed runs. The live RSS samples show that concurrency `3`
+should not be enabled on the current instance without a separate controlled
+memory test.
