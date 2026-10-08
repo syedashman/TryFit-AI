@@ -1,8 +1,8 @@
-# Deploying TryFit AI (free, auto-deploy on every push)
+# Deploying TryFit AI on Netlify and Render
 
 Stack:
-- **Frontend (Next.js)** → **Vercel** (free Hobby tier)
-- **Backend (FastAPI)** → **Render** (free Web Service tier)
+- **Frontend (Next.js)** → **Netlify**
+- **Backend (FastAPI)** → **Render**
 
 Both platforms redeploy automatically every time you push to your GitHub
 repo's connected branch — that covers "jo bhi kaam yahan se karenge woh
@@ -67,45 +67,57 @@ A deployed server needs a **service account key** instead:
    - **Root Directory:** `backend`
    - **Runtime:** Python 3
    - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1`
 3. Under **Environment → Secret Files**, add a file:
    - **Filename:** `/etc/secrets/gcp-key.json`
    - **Contents:** paste the full JSON from Step 2.
 4. Under **Environment → Environment Variables**, add every key from your
    local `backend/.env`, plus:
    - `GOOGLE_APPLICATION_CREDENTIALS` = `/etc/secrets/gcp-key.json`
-   - `CORS_ORIGINS` = `["https://your-app-name.vercel.app"]` (you'll get
+   - `APP_ENV` = `production`
+   - `CORS_ORIGINS` = `["https://your-app-name.netlify.app"]` (you'll get
      this exact URL in Step 4 — come back and update this after).
+   - `CORS_ORIGIN_REGEX` = `https://[a-z0-9-]+\.netlify\.app` for deploy previews.
+   - `MAX_CONCURRENT_JOBS` = `1` on small Render instances; increase only
+     after checking memory headroom.
 5. Click **Create Web Service**. First deploy takes a few minutes. You'll
    get a URL like `https://tryfit-ai-backend.onrender.com`.
-6. Test it: open `https://tryfit-ai-backend.onrender.com/api/health` in a
+6. Set **Health Check Path** to `/api/health`.
+7. Test it: open `https://tryfit-ai-backend.onrender.com/api/health` in a
    browser — should return the same JSON you saw locally.
 
 ---
 
-## 4. Deploy the frontend on Vercel
+## 4. Deploy the frontend on Netlify
 
-1. Sign up at **vercel.com** with GitHub → **Add New → Project** → import
-   the same repo.
-2. Set **Root Directory** to `frontend`.
-3. Add an Environment Variable:
+1. Create a site from the GitHub repository in **Netlify**. The included
+   `netlify.toml` sets `frontend` as the base directory and enables the
+   Next.js plugin.
+2. Under **Site configuration → Environment variables**, set:
    - `NEXT_PUBLIC_API_BASE_URL` = your Render backend URL from Step 3
-     (e.g. `https://tryfit-ai-backend.onrender.com`)
-4. Deploy. You'll get a URL like `https://tryfit-ai.vercel.app`.
+     (for example, `https://tryfit-ai-backend.onrender.com`, with no trailing
+     slash).
+3. Deploy. Note the site's `https://<site-name>.netlify.app` URL. Public
+   Next.js variables are embedded at build time, so changing this value
+   requires a new frontend deploy.
 
 ---
 
 ## 5. Close the loop — update CORS
 
-Go back to Render → your backend service → Environment → update
-`CORS_ORIGINS` to your real Vercel URL from Step 4:
+Go back to Render → your backend service → Environment and set
+`CORS_ORIGINS` to your production Netlify URL and any custom domain, for
+example:
 
 ```
-CORS_ORIGINS=["https://tryfit-ai.vercel.app"]
+CORS_ORIGINS=["https://your-site.netlify.app","https://tryfit.example.com"]
 ```
 
-Save — Render redeploys automatically. Without this step the frontend can
-load, but API calls will fail with a CORS error in the browser console.
+The backend also allows HTTPS `*.netlify.app` deploy-preview origins using
+`CORS_ORIGIN_REGEX`; set this explicitly on Render if you override the
+default. Custom domains must be listed in `CORS_ORIGINS`. Save the changes
+and Render will redeploy. Missing `NEXT_PUBLIC_API_BASE_URL` no longer
+falls back to localhost in production.
 
 ---
 
@@ -119,7 +131,7 @@ git commit -m "test auto deploy"
 git push
 ```
 
-Watch the Render and Vercel dashboards — both should start a new deploy
+Watch the Render and Netlify dashboards — both should start a new deploy
 within seconds, with no manual steps. Once live, refresh the site to see
 the change.
 
@@ -127,7 +139,7 @@ the change.
 
 ## 7. Custom domain (optional, later)
 
-Both Render and Vercel let you attach your own domain for free (you only
+Both Render and Netlify let you attach your own domain (you only
 pay for the domain itself, not the hosting). Do this once you're ready to
 share the demo under your own brand name instead of `.onrender.com` /
-`.vercel.app`.
+`.netlify.app`.

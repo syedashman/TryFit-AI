@@ -1,5 +1,60 @@
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8001";
+const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+export const API_BASE = (
+  configuredApiBase ||
+  (process.env.NODE_ENV === "development" ? "http://127.0.0.1:8001" : "")
+).replace(/\/+$/, "");
+
+const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
+
+function apiUrl(path: string): string {
+  if (!API_BASE) {
+    throw new Error(
+      "Backend URL is not configured. Set NEXT_PUBLIC_API_BASE_URL to the Render service URL."
+    );
+  }
+  return `${API_BASE}${path}`;
+}
+
+async function fetchWithRetry(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = 15_000
+): Promise<Response> {
+  const maxAttempts = 4;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(apiUrl(path), {
+        ...init,
+        signal: controller.signal,
+      });
+      if (
+        !RETRYABLE_STATUS_CODES.has(response.status) ||
+        attempt === maxAttempts - 1
+      ) {
+        return response;
+      }
+      await response.body?.cancel();
+      lastError = new Error(`Backend temporarily returned ${response.status}.`);
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts - 1) throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, 500 * 2 ** attempt)
+    );
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Backend request failed.");
+}
 
 export type CatalogColor = {
   name: string;
@@ -32,11 +87,12 @@ export type CatalogResponse = {
 export function assetUrl(path: string | null | undefined): string {
   if (!path) return "";
   if (path.startsWith("http")) return path;
+  if (!API_BASE) return "";
   return `${API_BASE}${path}`;
 }
 
 export async function fetchCatalog(): Promise<CatalogResponse> {
-  const res = await fetch(`${API_BASE}/api/catalog`, { cache: "no-store" });
+  const res = await fetchWithRetry("/api/catalog", { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to load catalog (${res.status})`);
   }
@@ -87,7 +143,7 @@ export async function generateTryOn(params: {
   form.append("quality_preset", "balanced");
   params.personImages.forEach((file) => form.append("person_images", file));
 
-  const res = await fetch(`${API_BASE}/api/catalog/generate`, {
+  const res = await fetch(apiUrl("/api/catalog/generate"), {
     method: "POST",
     body: form,
   });
@@ -102,7 +158,7 @@ export async function generateTryOn(params: {
 }
 
 export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
-  const res = await fetch(`${API_BASE}/api/catalog/batch/${batchId}`, {
+  const res = await fetchWithRetry(`/api/catalog/batch/${batchId}`, {
     cache: "no-store",
   });
   if (!res.ok) {
@@ -114,7 +170,7 @@ export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
 }
 
 export async function retryJob(jobId: string): Promise<{ job_id: string; message: string }> {
-  const res = await fetch(`${API_BASE}/api/catalog/retry/${jobId}`, {
+  const res = await fetch(apiUrl(`/api/catalog/retry/${jobId}`), {
     method: "POST",
   });
   if (!res.ok) {
@@ -124,7 +180,7 @@ export async function retryJob(jobId: string): Promise<{ job_id: string; message
 }
 
 export async function fetchJobStatus(jobId: string): Promise<BatchJob> {
-  const res = await fetch(`${API_BASE}/api/jobs/${jobId}`, { cache: "no-store" });
+  const res = await fetchWithRetry(`/api/jobs/${jobId}`, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to load job status (${res.status})`);
   }
@@ -132,7 +188,7 @@ export async function fetchJobStatus(jobId: string): Promise<BatchJob> {
 }
 
 export function jobResultUrl(jobId: string, version?: string): string {
-  const base = `${API_BASE}/api/jobs/${jobId}/result`;
+  const base = apiUrl(`/api/jobs/${jobId}/result`);
   return version ? `${base}?v=${encodeURIComponent(version)}` : base;
 }
 
@@ -142,7 +198,7 @@ export async function replaceJobPhoto(
 ): Promise<{ job_id: string; batch_id?: string; slot_index?: number | null; message: string }> {
   const form = new FormData();
   form.append("photo", photo);
-  const res = await fetch(`${API_BASE}/api/catalog/retry/${jobId}/replace-photo`, {
+  const res = await fetch(apiUrl(`/api/catalog/retry/${jobId}/replace-photo`), {
     method: "POST",
     body: form,
   });

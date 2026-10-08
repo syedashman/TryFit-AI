@@ -109,7 +109,7 @@ export function useTryFit({
   const [batch, setBatch] = useState<BatchStatus | null>(null);
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollGenerationRef = useRef(0);
   const activeBatchRef = useRef<string | null>(null);
   const storageKey = batchStorageKey(category, productNumber, colorName);
@@ -118,7 +118,7 @@ export function useTryFit({
     pollGenerationRef.current += 1;
     activeBatchRef.current = null;
     if (pollRef.current) {
-      clearInterval(pollRef.current);
+      clearTimeout(pollRef.current);
       pollRef.current = null;
     }
   }, []);
@@ -138,7 +138,6 @@ export function useTryFit({
           return;
         }
         try {
-          console.log("[RETRY:UI] polling batch", batchId);
           const status = await fetchBatchStatus(batchId);
           if (
             pollGeneration !== pollGenerationRef.current ||
@@ -162,6 +161,9 @@ export function useTryFit({
             setStage("done");
             return;
           }
+          pollRef.current = window.setTimeout(() => {
+            void tick();
+          }, POLL_INTERVAL_MS);
         } catch (err) {
           if (
             pollGeneration !== pollGenerationRef.current ||
@@ -184,9 +186,6 @@ export function useTryFit({
       };
 
       void tick();
-      pollRef.current = setInterval(() => {
-        void tick();
-      }, POLL_INTERVAL_MS);
     },
     [clearPoll]
   );
@@ -342,7 +341,6 @@ export function useTryFit({
       if (!isRealJobId(oldJobId)) return;
       if (retryingIds.has(oldJobId)) return;
 
-      console.log("[RETRY:UI] click job=", oldJobId);
       setRetryingIds((prev) => new Set(prev).add(oldJobId));
       setBatch((prev) =>
         prev
@@ -367,13 +365,10 @@ export function useTryFit({
       );
 
       try {
-        console.log("[RETRY:UI] POST start job=", oldJobId);
         const res = await retryJob(oldJobId);
-        console.log("[RETRY:UI] POST success job=", res.job_id);
 
         const currentBatchId = batch?.batch_id;
         if (currentBatchId) {
-          console.log("[RETRY:UI] polling resumed batch=", currentBatchId);
           startBatchPolling(currentBatchId);
         }
       } catch (err) {
