@@ -413,6 +413,17 @@ def _band_width_ratio(
     )
 
 
+def _width_at_reference_height(
+    reference: BodyGeometryProfile,
+    candidate: BodyGeometryProfile,
+) -> float:
+    return (
+        candidate.foreground_width_ratio
+        * reference.foreground_height_ratio
+        / max(candidate.foreground_height_ratio, 0.05)
+    )
+
+
 def build_body_geometry_profile(
     path: Path,
 ) -> BodyGeometryProfile:
@@ -579,7 +590,10 @@ def profile_distance(
     ] = (
         (
             reference.foreground_width_ratio,
-            candidate.foreground_width_ratio,
+            _width_at_reference_height(
+                reference,
+                candidate,
+            ),
             0.22,
         ),
         (
@@ -694,7 +708,10 @@ def distortion_penalties(
         ),
         "body_widening": round(
             excess(
-                candidate.foreground_width_ratio,
+                _width_at_reference_height(
+                    reference,
+                    candidate,
+                ),
                 reference.foreground_width_ratio,
                 1.06,
                 "high",

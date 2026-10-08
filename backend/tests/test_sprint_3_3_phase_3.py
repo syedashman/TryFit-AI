@@ -1,8 +1,13 @@
+from dataclasses import replace
 from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 from app.core.config import Settings
-from app.services.body_geometry import build_body_geometry_profile, geometry_similarity
+from app.services.body_geometry import (
+    build_body_geometry_profile,
+    distortion_penalties,
+    geometry_similarity,
+)
 from app.services.candidate_selector import NoEligibleCandidateError, choose_best_candidate
 
 def _person(path: Path, *, width: int, height: int, body_width: int) -> None:
@@ -28,6 +33,45 @@ def test_geometry_similarity_is_bounded(tmp_path: Path) -> None:
     _person(b, width=300, height=600, body_width=130)
     score = geometry_similarity(build_body_geometry_profile(a), build_body_geometry_profile(b))
     assert 0.0 <= score <= 1.0
+
+def test_geometry_widening_ignores_proportional_detector_scale(tmp_path: Path) -> None:
+    reference_path = tmp_path / "reference.png"
+    _person(reference_path, width=400, height=800, body_width=120)
+    reference = build_body_geometry_profile(reference_path)
+
+    scale = 3.2
+    proportionally_scaled = replace(
+        reference,
+        foreground_width_ratio=round(
+            reference.foreground_width_ratio * scale,
+            4,
+        ),
+        foreground_height_ratio=round(
+            reference.foreground_height_ratio * scale,
+            4,
+        ),
+    )
+    width_only_widened = replace(
+        proportionally_scaled,
+        foreground_width_ratio=round(
+            proportionally_scaled.foreground_width_ratio * 1.5,
+            4,
+        ),
+        subject_aspect_ratio=round(
+            reference.subject_aspect_ratio * 1.5,
+            4,
+        ),
+    )
+
+    assert distortion_penalties(
+        reference,
+        proportionally_scaled,
+    )["body_widening"] == 0.0
+    assert geometry_similarity(reference, proportionally_scaled) > 0.65
+    assert distortion_penalties(
+        reference,
+        width_only_widened,
+    )["body_widening"] > 0.32
 
 def test_phase3_settings() -> None:
     settings = Settings(_env_file=None, vertex_candidate_count=3, geometry_selection_enabled=True)

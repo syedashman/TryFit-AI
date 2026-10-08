@@ -1,16 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef, useState } from "react";
 import Image from "next/image";
-import { gsap } from "gsap";
 import { BatchJob, jobResultUrl } from "@/lib/api";
-import { downloadImage, jobFriendlyError, prefersReducedMotion, resultFilename } from "@/lib/tryfit";
+import { downloadImage, jobFriendlyError, resultFilename } from "@/lib/tryfit";
+import PhotoEditorModal from "./PhotoEditorModal";
 
-/**
- * A single fashion result card. Handles the three visual states — completed,
- * in-progress (retrying), and a shopper-safe failed state — without ever
- * surfacing raw backend error text.
- */
 export default function ResultCard({
   job,
   index,
@@ -30,137 +25,125 @@ export default function ResultCard({
   onRetry: () => void;
   onReplacePhoto: (photo: File) => void;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (prefersReducedMotion() || !cardRef.current) return;
-    const ctx = gsap.context(() => {
-      gsap.fromTo(
-        cardRef.current,
-        { autoAlpha: 0, y: 18 },
-        {
-          autoAlpha: 1,
-          y: 0,
-          duration: 0.5,
-          ease: "power2.out",
-          delay: Math.min(index * 0.08, 0.4),
-        }
-      );
-    });
-    return () => ctx.revert();
-  }, [index]);
-
+  const [editingPhoto, setEditingPhoto] = useState<File | null>(null);
+  const [actionsRevealed, setActionsRevealed] = useState(false);
   const filename = resultFilename({ category, productNumber, index: index + 1 });
   const isProcessing =
     isRetrying || job.status === "processing" || job.status === "queued";
-
-  function chooseReplacement() {
-    fileInputRef.current?.click();
-  }
+  const resultUrl = job.job_id
+    ? jobResultUrl(job.job_id, job.updated_at)
+    : null;
 
   function handleReplacement(event: React.ChangeEvent<HTMLInputElement>) {
     const photo = event.target.files?.[0];
     event.target.value = "";
-    if (photo) onReplacePhoto(photo);
+    if (photo?.type.startsWith("image/")) setEditingPhoto(photo);
+  }
+
+  function handleImageClick() {
+    if (window.matchMedia("(hover: none), (pointer: coarse)").matches && !actionsRevealed) {
+      setActionsRevealed(true);
+      return;
+    }
+    setActionsRevealed(false);
+    onOpen();
   }
 
   return (
-    <div ref={cardRef} className="group">
-      <div className="relative aspect-[3/4] overflow-hidden rounded-lg border border-ink/10 bg-ink/5">
-        {job.status === "completed" && !isRetrying ? (
-          <>
-            <button
-              onClick={onOpen}
-              className="relative block h-full w-full"
-              aria-label={`View look ${index + 1} fullscreen`}
-            >
-              <Image
-                src={jobResultUrl(job.job_id!, job.updated_at)}
-                alt={`Try Fit look ${index + 1}`}
-                fill
-                sizes="(max-width: 768px) 50vw, 300px"
-                className="object-cover transition duration-500 group-hover:scale-[1.03]"
-                unoptimized
-                loading="lazy"
-              />
-            </button>
-            <div className="tryfit-hover-actions pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 bg-gradient-to-t from-ink/70 to-transparent p-3 opacity-0 transition">
+    <div>
+      <div
+        className={`group relative aspect-square overflow-hidden border border-[var(--tryfit-line)] bg-[var(--tryfit-panel)] ${actionsRevealed ? "tryfit-actions-revealed" : ""}`}
+      >
+        {job.status === "completed" && !isRetrying && resultUrl ? (
+          <button
+            onClick={handleImageClick}
+            className="relative block h-full w-full"
+            aria-label={`View look ${index + 1} fullscreen`}
+          >
+            <Image
+              src={resultUrl}
+              alt={`Try Fit look ${index + 1}`}
+              fill
+              sizes="(max-width: 768px) 50vw, 300px"
+              className="object-contain"
+              unoptimized
+              loading="lazy"
+            />
+          </button>
+        ) : isProcessing ? (
+          <div
+            className="flex h-full flex-col items-center justify-center gap-3 text-center"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--tryfit-line)] border-t-[var(--tryfit-olive)]" />
+            <span className="text-sm text-[var(--tryfit-muted)]">
+              Creating image…
+            </span>
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center p-5 text-center text-sm text-[var(--tryfit-muted)]">
+            {jobFriendlyError(job)}
+          </div>
+        )}
+        {!isProcessing && (
+          <div className="tryfit-result-actions pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-end gap-2 bg-gradient-to-t from-black/65 via-black/20 to-transparent px-3 pb-3 pt-10 opacity-0 transition-opacity duration-200 ease-out motion-reduce:transition-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+            {job.status === "completed" && resultUrl && (
               <button
-                onClick={() => downloadImage(jobResultUrl(job.job_id!, job.updated_at), filename)}
-                className="pointer-events-auto rounded-full bg-parchment/90 px-4 py-1.5 text-xs font-semibold text-emerald-deep transition hover:bg-parchment"
+                onClick={() => downloadImage(resultUrl, filename)}
+                type="button"
+                aria-label="Download image"
+                className="pointer-events-auto min-h-8 border border-[var(--tryfit-line)] bg-white px-3 py-1.5 text-xs text-[var(--tryfit-ink)] shadow-sm transition-colors hover:bg-white focus-visible:bg-white"
               >
                 Download
               </button>
-              <button
-                onClick={onRetry}
-                className="pointer-events-auto rounded-full bg-parchment/20 px-4 py-1.5 text-xs font-semibold text-parchment transition hover:bg-parchment/30"
-              >
-                Retry
-              </button>
-            </div>
-          </>
-        ) : isProcessing ? (
-          <div className="tryfit-shimmer flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-            <div className="h-7 w-7 animate-spin rounded-full border-2 border-gold border-t-transparent" />
-            <p className="text-xs text-ink/50">Reworking this look…</p>
-          </div>
-        ) : (
-          <div className="relative flex h-full flex-col items-center justify-center gap-3 p-5 text-center">
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-rani/10 text-rani-deep">
-              !
-            </span>
-            <p className="text-sm font-semibold text-ink/70">
-              {jobFriendlyError(job)}
-            </p>
-            <div className="tryfit-hover-actions pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 bg-gradient-to-t from-ink/70 to-transparent p-3 opacity-0 transition">
-              <button onClick={onRetry} className="rounded-full bg-parchment/90 px-4 py-1.5 text-xs font-semibold text-emerald-deep">
-                Retry
-              </button>
-              <button onClick={chooseReplacement} className="rounded-full bg-parchment/20 px-4 py-1.5 text-xs font-semibold text-parchment">
-                Change Photo
-              </button>
-            </div>
+            )}
+            <button
+              onClick={onRetry}
+              type="button"
+              aria-label="Retry image generation"
+              className="pointer-events-auto min-h-8 border border-[var(--tryfit-line)] bg-white px-3 py-1.5 text-xs text-[var(--tryfit-ink)] shadow-sm transition-colors hover:bg-white focus-visible:bg-white"
+            >
+              Try Again
+            </button>
           </div>
         )}
       </div>
 
-      {/* Mobile-friendly controls always visible below the image */}
-      <div className="mt-2 flex items-center justify-between sm:hidden">
-        <span className="text-xs uppercase tracking-[0.14em] text-ink/40">
-          Look {index + 1}
-        </span>
-        <div className="flex gap-2">
-          {job.status === "completed" && !isRetrying && (
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-[var(--tryfit-muted)]">Look {index + 1}</span>
+        {!isProcessing && (
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => downloadImage(jobResultUrl(job.job_id!, job.updated_at), filename)}
-              className="rounded-full border border-ink/15 px-3 py-1 text-xs font-semibold text-ink/70"
+              onClick={() => fileInputRef.current?.click()}
+              className="px-2 py-2 text-xs text-[var(--tryfit-muted)] underline underline-offset-4 hover:text-[var(--tryfit-ink)]"
             >
-              Download
+              Change Photo
             </button>
-          )}
-          {(job.status === "completed" || job.status === "failed") &&
-            !isRetrying && (
-              <>
-                <button onClick={onRetry} className="rounded-full border border-ink/15 px-3 py-1 text-xs font-semibold text-ink/70">
-                  Retry
-                </button>
-                {job.status === "failed" && (
-                  <button onClick={chooseReplacement} className="rounded-full border border-ink/15 px-3 py-1 text-xs font-semibold text-ink/70">
-                    Change Photo
-                  </button>
-                )}
-              </>
-            )}
-        </div>
+          </div>
+        )}
       </div>
+
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
+        capture="environment"
         className="hidden"
         onChange={handleReplacement}
       />
+      {editingPhoto && (
+        <PhotoEditorModal
+          file={editingPhoto}
+          onCancel={() => setEditingPhoto(null)}
+          onConfirm={(photo) => {
+            onReplacePhoto(photo);
+            setEditingPhoto(null);
+          }}
+          onReplace={setEditingPhoto}
+        />
+      )}
     </div>
   );
 }

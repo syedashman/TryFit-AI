@@ -101,6 +101,11 @@ a {
   background: radial-gradient(circle at 50% 42%, rgba(200, 176, 141, 0.12), transparent 44%);
 }
 
+.tryfit-actions-revealed .tryfit-result-actions {
+  pointer-events: auto;
+  opacity: 1;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .group:hover .tryfit-hover-actions {
     pointer-events: auto;

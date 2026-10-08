@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import CameraCapture from "@/components/CameraCapture";
 import { MAX_PHOTOS, MIN_PHOTOS } from "@/lib/useTryFit";
+import PhotoEditorModal from "./PhotoEditorModal";
 
 export default function UploadPanel({
   previews,
@@ -16,13 +17,37 @@ export default function UploadPanel({
   previews: string[];
   fileCount: number;
   canSubmit: boolean;
-  onAddFiles: (list: FileList | null) => void;
+  onAddFiles: (list: FileList | File[] | null) => void;
   onAddCaptured: (file: File) => void;
   onRemove: (idx: number) => void;
   onGenerate: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [showCamera, setShowCamera] = useState(false);
+  const [editQueue, setEditQueue] = useState<File[]>([]);
+  const [editSource, setEditSource] = useState<"upload" | "camera" | null>(null);
+
+  function queueImages(files: File[], source: "upload" | "camera") {
+    const availableSlots = Math.max(0, MAX_PHOTOS - fileCount);
+    const images = files
+      .filter((file) => file.type.startsWith("image/"))
+      .slice(0, availableSlots);
+    if (images.length) {
+      setEditQueue(images);
+      setEditSource(source);
+    }
+  }
+
+  function confirmEditedImage(file: File) {
+    if (editSource === "camera") onAddCaptured(file);
+    else onAddFiles([file]);
+    if (editQueue.length <= 1) setEditSource(null);
+    setEditQueue((pending) => pending.slice(1));
+  }
+
+  function replaceEditingImage(file: File) {
+    setEditQueue((pending) => [file, ...pending.slice(1)]);
+  }
 
   return (
     <div>
@@ -30,6 +55,28 @@ export default function UploadPanel({
       <p className="mt-3 max-w-xl text-base leading-relaxed text-[rgba(17,17,17,0.62)]">
         Upload {MIN_PHOTOS}–{MAX_PHOTOS} clear photos. Each photo creates one Try Fit result.
       </p>
+
+      <section aria-label="Photo framing examples" className="mt-6">
+        <div className="grid max-w-sm grid-cols-2 gap-3">
+          <figure className="relative aspect-[3/4] overflow-hidden border border-[var(--tryfit-line)] bg-[#e9e6df]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/photo-guide/full-body.avif" alt="Example full-body person photo" className="h-full w-full object-cover object-center" />
+            <figcaption aria-label="Good example" className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#285641] text-lg font-semibold text-white shadow-sm">
+              ✓
+            </figcaption>
+          </figure>
+          <figure className="relative aspect-[3/4] overflow-hidden border border-[var(--tryfit-line)] bg-[#e9e6df]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/photo-guide/cropped-half.jpg" alt="Example half-body, cropped person photo" className="h-full w-full object-cover object-center" />
+            <figcaption aria-label="Cropped example" className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#963930] text-lg font-semibold text-white shadow-sm">
+              ✕
+            </figcaption>
+          </figure>
+        </div>
+        <p className="mt-3 text-sm text-[var(--tryfit-muted)]">
+          Upload a full-body image for better results.
+        </p>
+      </section>
 
       <div className="mt-6 rounded-lg border border-[rgba(17,17,17,0.12)] bg-[#f8f7f4] p-5">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -41,14 +88,23 @@ export default function UploadPanel({
           </button>
         </div>
 
-        <input ref={inputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => onAddFiles(e.target.files)} />
-
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            queueImages(Array.from(event.currentTarget.files || []), "upload");
+            event.currentTarget.value = "";
+          }}
+        />
         {showCamera && (
           <div className="mt-4">
             <CameraCapture
               onCapture={(file) => {
-                onAddCaptured(file);
-                if (fileCount + 1 >= MAX_PHOTOS) setShowCamera(false);
+                queueImages([file], "camera");
+                setShowCamera(false);
               }}
               onClose={() => setShowCamera(false)}
             />
@@ -75,6 +131,18 @@ export default function UploadPanel({
       </button>
       {fileCount > 0 && fileCount < MIN_PHOTOS && (
         <p className="mt-2 text-xs text-[rgba(17,17,17,0.6)]">Upload at least {MIN_PHOTOS} photos to continue.</p>
+      )}
+
+      {editQueue[0] && (
+        <PhotoEditorModal
+          file={editQueue[0]}
+          onCancel={() => {
+            setEditQueue([]);
+            setEditSource(null);
+          }}
+          onConfirm={confirmEditedImage}
+          onReplace={replaceEditingImage}
+        />
       )}
     </div>
   );

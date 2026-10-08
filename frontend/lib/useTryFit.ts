@@ -9,6 +9,7 @@ import {
   retryJob,
 } from "./api";
 import { batchStorageKey, forgetBatch, rememberBatch } from "./tryfit";
+import { enhancePersonPhoto } from "./imageEnhancement";
 
 export type TryFitStage =
   | "upload"
@@ -283,12 +284,15 @@ export function useTryFit({
     setBatch(optimisticBatch(files.length));
     setStage("processing");
     try {
+      const preparedFiles = await Promise.all(
+        files.map((file) => enhancePersonPhoto(file))
+      );
       const res = await generateTryOn({
         category,
         productNumber,
         color: colorName,
         clothType: "overall",
-        personImages: files,
+        personImages: preparedFiles,
       });
       const realJobs = (res.jobs || []).filter((job) => isRealJobId(job.job_id));
       if (realJobs.length !== files.length) {
@@ -429,7 +433,8 @@ export function useTryFit({
           : prev
       );
       try {
-        const res = await replaceJobPhoto(jobId, photo);
+        const preparedPhoto = await enhancePersonPhoto(photo);
+        const res = await replaceJobPhoto(jobId, preparedPhoto);
         if (res.batch_id) startBatchPolling(res.batch_id);
         else if (batch?.batch_id) startBatchPolling(batch.batch_id);
       } catch (err) {
