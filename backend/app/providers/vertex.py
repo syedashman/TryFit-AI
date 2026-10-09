@@ -353,6 +353,7 @@ class VertexTryOnProvider(VTONProvider):
             )
 
         except Exception as exc:
+            final_path.unlink(missing_ok=True)
             raise ProviderError(
                 "Vertex returned invalid base64 "
                 f"image data: {exc}",
@@ -360,6 +361,34 @@ class VertexTryOnProvider(VTONProvider):
             ) from exc
 
         return final_path
+
+    @classmethod
+    def _decode_predictions(
+        cls,
+        predictions: list[Any],
+        results_dir: Path,
+        generation_id: str,
+    ) -> list[Path]:
+        candidate_paths: list[Path] = []
+        try:
+            for index in range(len(predictions)):
+                prediction = predictions[index]
+                predictions[index] = None
+                try:
+                    temp_output = results_dir / (
+                        f"vertex-{generation_id}"
+                        f"-candidate-{index}"
+                    )
+                    candidate_paths.append(
+                        cls._decode_prediction(prediction, temp_output)
+                    )
+                finally:
+                    del prediction
+        except Exception:
+            for candidate_path in candidate_paths:
+                candidate_path.unlink(missing_ok=True)
+            raise
+        return candidate_paths
 
     @staticmethod
     def _single_candidate_rejected(
@@ -561,6 +590,7 @@ class VertexTryOnProvider(VTONProvider):
                 "no response."
             )
 
+        del payload
         vertex_request_seconds = time.perf_counter() - vertex_request_started
         round_number = getattr(request, "attempt_index", 0) + 1
         logger.info(
@@ -572,7 +602,10 @@ class VertexTryOnProvider(VTONProvider):
         )
 
         try:
-            data = response.json()
+            try:
+                data = response.json()
+            finally:
+                del response
 
         except ValueError as exc:
             raise ProviderError(
@@ -599,25 +632,13 @@ class VertexTryOnProvider(VTONProvider):
 
         generation_id = uuid.uuid4().hex
 
-        candidate_paths: list[Path] = []
-
-        for index, prediction in enumerate(
-            predictions
-        ):
-            temp_output = (
-                self.settings.results_dir
-                / (
-                    f"vertex-{generation_id}"
-                    f"-candidate-{index}"
-                )
-            )
-
-            candidate_paths.append(
-                self._decode_prediction(
-                    prediction,
-                    temp_output,
-                )
-            )
+        prediction_count = len(predictions)
+        candidate_paths = self._decode_predictions(
+            predictions,
+            self.settings.results_dir,
+            generation_id,
+        )
+        del data, predictions
 
         logger.info(
             "Vertex candidates decoded job=%s round=%s candidates=%s",
@@ -876,7 +897,7 @@ class VertexTryOnProvider(VTONProvider):
             image_path=chosen_path,
             raw={
                 "prediction_count":
-                    int(len(predictions)),
+                    int(prediction_count),
                 "model":
                     self.settings.vertex_model,
                 "location":

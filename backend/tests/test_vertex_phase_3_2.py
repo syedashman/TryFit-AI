@@ -7,6 +7,7 @@ import pytest
 from app.core.config import Settings
 from app.providers.base import (
     ProviderConfigurationError,
+    ProviderError,
     ProviderUnavailableError,
 )
 from app.providers.vertex import VertexTryOnProvider
@@ -71,6 +72,48 @@ def test_vertex_decodes_prediction(tmp_path):
     )
     assert result.read_bytes() == b"png-data"
     assert result.suffix == ".png"
+
+
+def test_vertex_decode_predictions_releases_encoded_candidates(tmp_path):
+    predictions = [
+        {
+            "mimeType": "image/png",
+            "bytesBase64Encoded": base64.b64encode(b"first").decode(),
+        },
+        {
+            "mimeType": "image/png",
+            "bytesBase64Encoded": base64.b64encode(b"second").decode(),
+        },
+    ]
+
+    results = VertexTryOnProvider._decode_predictions(
+        predictions,
+        tmp_path,
+        "generation",
+    )
+
+    assert [result.read_bytes() for result in results] == [b"first", b"second"]
+    assert predictions == [None, None]
+
+
+def test_vertex_decode_predictions_removes_partial_outputs_on_error(tmp_path):
+    predictions = [
+        {
+            "mimeType": "image/png",
+            "bytesBase64Encoded": base64.b64encode(b"first").decode(),
+        },
+        {"mimeType": "image/png", "bytesBase64Encoded": "invalid-base64"},
+    ]
+
+    with pytest.raises(ProviderError, match="invalid base64"):
+        VertexTryOnProvider._decode_predictions(
+            predictions,
+            tmp_path,
+            "generation",
+        )
+
+    assert predictions == [None, None]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_vertex_403_is_configuration_error():
