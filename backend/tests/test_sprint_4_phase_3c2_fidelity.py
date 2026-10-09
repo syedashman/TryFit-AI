@@ -29,6 +29,7 @@ from app.services import job_service
 from app.services.body_geometry import build_body_geometry_profile
 from app.services.candidate_selector import NoEligibleCandidateError, choose_best_candidate
 from app.services.garment_fidelity import evaluate_garment_fidelity
+from app.services.pose_customization import IdentityPreservationReview
 from app.services.storage import load_job, save_job
 
 
@@ -233,6 +234,16 @@ def test_same_photo_retry_uses_same_person_for_both_rounds(
         "get_vton_provider",
         lambda _s: provider,
     )
+    monkeypatch.setattr(
+        job_service,
+        "verify_person_preservation",
+        lambda *_args: IdentityPreservationReview(
+            identity="match",
+            visible_body="preserved",
+            confidence=0.95,
+            reason="The same person is visible.",
+        ),
+    )
 
     job_service.process_job(
         record.job_id,
@@ -252,6 +263,125 @@ def test_same_photo_retry_uses_same_person_for_both_rounds(
     saved = load_job(record.job_id, settings)
     assert saved is not None
     assert saved.status == "completed"
+    assert (
+        saved.provider_metadata["identity_preservation_review"]["identity"]
+        == "match"
+    )
+
+
+def test_identity_drift_review_rejects_and_removes_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_dir=tmp_path / "storage",
+        google_cloud_project="test-project",
+    )
+    record = _job(tmp_path, settings)
+    provider = _RecordingProvider([_result(tmp_path)])
+    monkeypatch.setattr(job_service, "get_vton_provider", lambda _s: provider)
+    monkeypatch.setattr(
+        job_service,
+        "verify_person_preservation",
+        lambda *_args: IdentityPreservationReview(
+            identity="mismatch",
+            visible_body="drifted",
+            confidence=0.91,
+            reason="The face and visible proportions changed.",
+        ),
+    )
+
+    job_service.process_job(
+        record.job_id,
+        settings,
+        num_inference_steps=30,
+        guidance_scale=2.0,
+        seed=42,
+    )
+
+    saved = load_job(record.job_id, settings)
+    assert saved is not None
+    assert saved.status == "failed"
+    assert saved.error_code == "identity_preservation_failed"
+    assert saved.result_file is None
+    assert (
+        saved.provider_metadata["identity_preservation_review"]["rejected"]
+        is True
+    )
+
+
+def test_predefined_pose_quality_failure_falls_back_to_uploaded_photo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        storage_dir=tmp_path / "storage",
+        commercial_max_generation_rounds=2,
+    )
+    record = _job(tmp_path, settings)
+    record.provider_metadata["pose_reference_name"] = "side"
+    save_job(record, settings)
+
+    pose_person = _person(tmp_path / "posed-render.png", body_width=125)
+    monkeypatch.setattr(
+        job_service,
+        "_prepare_pose_render_person",
+        lambda *_args: (
+            pose_person,
+            build_body_geometry_profile(pose_person).to_dict(),
+            pose_person,
+        ),
+    )
+    provider = _RecordingProvider([
+        ProviderError(
+            "No pose candidate passed geometry checks.",
+            code="distorted_tryon_result",
+            retryable=True,
+        ),
+        ProviderError(
+            "No pose candidate passed garment checks.",
+            code="garment_fidelity_failed",
+            retryable=True,
+        ),
+        _result(tmp_path),
+    ])
+    monkeypatch.setattr(job_service, "get_vton_provider", lambda _s: provider)
+    monkeypatch.setattr(
+        job_service,
+        "verify_person_preservation",
+        lambda *_args: IdentityPreservationReview(
+            identity="match",
+            visible_body="preserved",
+            confidence=0.95,
+            reason="The uploaded person is preserved.",
+        ),
+    )
+
+    job_service.process_job(
+        record.job_id,
+        settings,
+        num_inference_steps=30,
+        guidance_scale=2.0,
+        seed=42,
+    )
+
+    assert provider.calls == [
+        str(pose_person),
+        str(pose_person),
+        record.person_file,
+    ]
+    saved = load_job(record.job_id, settings)
+    assert saved is not None
+    assert saved.status == "completed"
+    assert saved.provider_metadata["pose_fallback"]["strategy"] == (
+        "uploaded_photo_original_pose"
+    )
+    assert saved.provider_metadata["pose_source_strategy"] == (
+        "uploaded_photo_quality_fallback"
+    )
+    assert saved.retry_history[-1]["round"] == "uploaded_photo_fallback"
 
 
 def test_retry_stops_at_two_rounds_and_fails(
@@ -343,4 +473,3 @@ def test_non_quality_failures_are_not_retried(
     assert saved is not None
     assert saved.status == "failed"
     assert saved.error_code == error.code
-

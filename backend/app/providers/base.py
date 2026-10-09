@@ -18,6 +18,7 @@ class TryOnRequest:
     seed: int = 42
     person_images: list[Path] | None = None
     geometry_reference_image: Path | None = None
+    identity_reference_image: Path | None = None
     geometry_profile: dict[str, Any] | None = None
     commercial_instructions: str | None = None
     job_id: str | None = None
@@ -44,6 +45,11 @@ class TryOnRequest:
         ):
             self.geometry_reference_image = Path(
                 self.geometry_reference_image
+            )
+
+        if self.identity_reference_image is not None:
+            self.identity_reference_image = Path(
+                self.identity_reference_image
             )
 
         self.garment_description = (

@@ -24,7 +24,7 @@ def test_auto_provider_is_allowed():
 
 def test_max_concurrent_jobs_has_safe_default():
     settings = Settings(_env_file=None)
-    assert settings.max_concurrent_jobs == 2
+    assert settings.max_concurrent_jobs == 1
     assert 1 <= settings.max_concurrent_jobs <= 3
 
 

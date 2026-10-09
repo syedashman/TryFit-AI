@@ -18,14 +18,57 @@ from app.services.quality_engine import (
 )
 from app.services.visual_quality import enhance_result_image
 from app.services.phase3c2_quality import build_phase3c2_report
+from app.services.body_geometry import build_body_geometry_profile
+from app.services.image_normalizer import normalize_for_provider
+from app.services.person_validation import validate_person_images
+from app.services.pose_customization import (
+    PoseCustomizationError,
+    generate_posed_reference,
+    verify_person_preservation,
+)
 from app.services.storage import (
     load_job,
     save_job,
-    list_jobs,
+    list_batch_jobs,
 )
 from app.services.memory_metrics import log_memory
 
 logger = logging.getLogger(__name__)
+_IDENTITY_REVIEW_TRIGGER_SCORE = 0.82
+
+
+def _needs_identity_review(
+    metadata: dict[str, Any],
+) -> bool:
+    candidates = metadata.get("candidate_scores")
+    if not isinstance(candidates, list):
+        return True
+
+    selected_index = metadata.get("selected_candidate_index")
+    if isinstance(selected_index, bool) or not isinstance(selected_index, int):
+        return True
+    if selected_index < 0 or selected_index >= len(candidates):
+        return True
+
+    selected = candidates[selected_index]
+    if not isinstance(selected, dict) or selected.get("identity_reliable") is not True:
+        return True
+
+    identity_score = selected.get("identity_score")
+    if isinstance(identity_score, bool) or not isinstance(identity_score, (int, float)):
+        return True
+
+    geometry_score = selected.get(
+        "full_body_similarity",
+        selected.get("geometry_similarity"),
+    )
+    if isinstance(geometry_score, bool) or not isinstance(geometry_score, (int, float)):
+        return True
+
+    return (
+        identity_score < _IDENTITY_REVIEW_TRIGGER_SCORE
+        or geometry_score < 0.90
+    )
 
 
 def _mark_job_stale_if_needed(record: Any, settings: Settings) -> bool:
@@ -208,6 +251,86 @@ def _provider_metadata(
     return metadata
 
 
+def _prepare_pose_render_person(
+    record: JobRecord,
+    settings: Settings,
+) -> tuple[Path, dict[str, object], Path | None]:
+    original_person = Path(record.person_file)
+    metadata = record.provider_metadata or {}
+    pose_name = metadata.get("pose_reference_name")
+    if not pose_name:
+        return original_person, record.geometry_profile, None
+    if not isinstance(pose_name, str):
+        raise ProviderError(
+            "The requested pose reference is invalid.",
+            code="pose_reference_invalid",
+            provider=record.provider,
+            retryable=False,
+        )
+
+    category = str(metadata.get("catalog_category", "")).lower()
+    subject_description = {
+        "men": "an adult man",
+        "women": "an adult woman",
+        "kids": "a child",
+    }.get(category, "a person")
+    try:
+        pose_image = generate_posed_reference(
+            settings,
+            [original_person],
+            pose_name,
+            subject_description,
+            settings.storage_dir / "pose_cache",
+            body_geometry=record.geometry_profile,
+        )
+    except PoseCustomizationError as exc:
+        raise ProviderError(
+            "Could not prepare this pose; the other Try Fit outputs are unaffected.",
+            code="pose_synthesis_failed",
+            provider=record.provider,
+            retryable=True,
+            details={"pose_reference_name": pose_name},
+        ) from exc
+
+    normalized_pose: Path | None = None
+    try:
+        normalized_pose = normalize_for_provider(
+            pose_image,
+            settings.storage_dir / "normalized",
+            output_format=settings.provider_image_format,
+            min_width=settings.person_min_width,
+            min_height=settings.person_min_height,
+            max_dimension=settings.effective_max_image_dimension,
+        )
+        report = validate_person_images(
+            [normalized_pose],
+            min_images=1,
+            max_images=1,
+            min_width=settings.person_min_width,
+            min_height=settings.person_min_height,
+            min_sharpness=settings.person_min_sharpness,
+            identity_threshold=settings.identity_consistency_threshold,
+            identity_hard_reject_threshold=settings.identity_hard_reject_threshold,
+            cloth_type=record.cloth_type,
+        )
+        if not report.accepted:
+            raise ProviderError(
+                "The generated pose reference did not pass person-photo validation.",
+                code="pose_reference_rejected",
+                provider=record.provider,
+                retryable=False,
+                details={"validation": report.to_dict()},
+            )
+        geometry = build_body_geometry_profile(normalized_pose)
+        return normalized_pose, geometry.to_dict(), normalized_pose
+    except Exception:
+        if normalized_pose is not None:
+            normalized_pose.unlink(missing_ok=True)
+        raise
+    finally:
+        pose_image.unlink(missing_ok=True)
+
+
 def process_job(
     job_id: str,
     settings: Settings,
@@ -244,7 +367,6 @@ def process_job(
         logger.warning("Job %s was already stale before work started.", job_id)
         return
 
-    print(f"[JOB] process_job entered job={job_id} status={record.status}")
     log_memory(f"before_vertex job={job_id}")
     logger.info("[JOB] process_job entered job=%s status=%s", job_id, record.status)
 
@@ -260,18 +382,20 @@ def process_job(
         settings,
     )
 
+    generated_render_person: Path | None = None
     try:
         provider = get_vton_provider(
             settings
         )
 
-        render_person = Path(record.person_file)
+        original_person = Path(record.person_file)
+        (
+            render_person,
+            render_geometry_profile,
+            generated_render_person,
+        ) = _prepare_pose_render_person(record, settings)
 
-        logger.info("[IDENTITY] job=%s", job_id)
-        logger.info("[IDENTITY] original_person=%s", render_person)
-        logger.info("[IDENTITY] vertex_person=%s", render_person)
-        logger.info("[IDENTITY] garment_reference=%s", record.garment_file)
-        if Path(record.garment_file).resolve() == render_person.resolve():
+        if Path(record.garment_file).resolve() == original_person.resolve():
             raise ProviderError(
                 "Person and garment references must be different files.",
                 code="identity_reference_conflict",
@@ -286,7 +410,6 @@ def process_job(
             )
         ]
 
-        print(f"[JOB] provider.generate starting job={job_id} provider={record.provider}")
         logger.info("[JOB] provider.generate starting job=%s provider=%s", job_id, record.provider)
 
         request = TryOnRequest(
@@ -304,13 +427,20 @@ def process_job(
             ),
             guidance_scale=guidance_scale,
             seed=seed,
-            person_images=person_files,
+            person_images=(
+                [render_person]
+                if generated_render_person is not None
+                else person_files
+            ),
             geometry_reference_image=(
                 render_person
             ),
-            geometry_profile=(
-                record.geometry_profile
+            identity_reference_image=(
+                original_person
+                if generated_render_person is not None
+                else None
             ),
+            geometry_profile=render_geometry_profile,
             commercial_instructions=(
                 record.commercial_instructions
             ),
@@ -347,9 +477,10 @@ def process_job(
         }
 
         provider_calls = 0
+        pose_fallback_attempted = False
         for attempt_index in range(max_attempts):
-            # Same photo every round. render_person is the assigned photo and
-            # is never reassigned inside this loop.
+            # Keep each retry on the same assigned input; only the explicit
+            # predefined-pose recovery below may switch back to the upload.
             request.person_image = render_person
             if record.cloth_type in {"overall", "lower"}:
                 request.geometry_reference_image = render_person
@@ -362,22 +493,22 @@ def process_job(
                 max_attempts,
             )
             logger.info(
-                "PERSON USED: %s",
-                render_person,
+                "VTON attempt job=%s round=%s/%s",
+                job_id,
+                attempt_index + 1,
+                max_attempts,
             )
-            print(f"VTON ROUND {attempt_index + 1}/{max_attempts}")
-            print(f"PERSON USED: {render_person}")
-            print(f"[JOB] provider.generate attempt={attempt_index + 1}/{max_attempts} job={job_id}")
 
             try:
                 provider_calls += 1
                 round_started = time.perf_counter()
-                print(f"[PERF] job={job_id} vertex_round_{attempt_index + 1}_start")
                 result = provider.generate(request)
                 log_memory(f"after_vertex job={job_id}")
-                print(
-                    f"[PERF] job={job_id} vertex_round_{attempt_index + 1}_end "
-                    f"duration={time.perf_counter() - round_started:.2f}s"
+                logger.info(
+                    "Provider attempt complete job=%s round=%s duration_seconds=%.2f",
+                    job_id,
+                    attempt_index + 1,
+                    time.perf_counter() - round_started,
                 )
                 retry_history.append({
                     "attempt": attempt_index + 1,
@@ -405,11 +536,73 @@ def process_job(
                     attempt_error.code
                     in RETRYABLE_QUALITY_CODES
                 )
-                if (
-                    not is_retryable_quality
-                    or attempt_index >= max_attempts - 1
-                ):
+                if not is_retryable_quality:
                     raise
+                if attempt_index < max_attempts - 1:
+                    continue
+                if generated_render_person is None or pose_fallback_attempted:
+                    raise
+
+                pose_fallback_attempted = True
+                original_geometry = (
+                    record.geometry_profile
+                    if isinstance(record.geometry_profile, dict)
+                    else build_body_geometry_profile(original_person).to_dict()
+                )
+                request.person_image = original_person
+                request.person_images = [original_person]
+                request.geometry_reference_image = original_person
+                request.identity_reference_image = original_person
+                request.geometry_profile = original_geometry
+                request.seed = seed + max_attempts * 97
+                request.attempt_index = max_attempts
+
+                record.provider_metadata = {
+                    **(
+                        record.provider_metadata
+                        if isinstance(record.provider_metadata, dict)
+                        else {}
+                    ),
+                    "pose_fallback": {
+                        "strategy": "uploaded_photo_original_pose",
+                        "reason_code": attempt_error.code,
+                        "reason": str(attempt_error),
+                    },
+                    "pose_source_strategy": "uploaded_photo_quality_fallback",
+                }
+                logger.warning(
+                    "Predefined-pose candidates failed quality checks; "
+                    "retrying uploaded photo job=%s pose=%s reason=%s",
+                    job_id,
+                    record.provider_metadata.get("pose_reference_name"),
+                    attempt_error.code,
+                )
+                generated_render_person.unlink(missing_ok=True)
+                generated_render_person = None
+
+                fallback_attempt = len(retry_history) + 1
+                try:
+                    provider_calls += 1
+                    result = provider.generate(request)
+                    retry_history.append({
+                        "attempt": fallback_attempt,
+                        "round": "uploaded_photo_fallback",
+                        "person_file": str(original_person),
+                        "seed": request.seed,
+                        "status": "provider_completed",
+                    })
+                except ProviderError as fallback_error:
+                    retry_history.append({
+                        "attempt": fallback_attempt,
+                        "round": "uploaded_photo_fallback",
+                        "person_file": str(original_person),
+                        "seed": request.seed,
+                        "status": "failed",
+                        "error_code": fallback_error.code,
+                        "error": str(fallback_error),
+                    })
+                    raise
+                break
 
         if result is None:
             raise ProviderError(
@@ -451,6 +644,36 @@ def process_job(
             **(record.provider_metadata if isinstance(record.provider_metadata, dict) else {}),
             **_provider_metadata(result),
         }
+
+        if (
+            record.provider == "vertex"
+            and final_path is not None
+            and _needs_identity_review(metadata)
+        ):
+            try:
+                identity_review = verify_person_preservation(
+                    settings,
+                    original_person,
+                    final_path,
+                )
+            except PoseCustomizationError as exc:
+                raise ProviderError(
+                    "Could not verify that the try-on preserved the uploaded person.",
+                    code="identity_preservation_review_failed",
+                    provider=record.provider,
+                    retryable=False,
+                ) from exc
+
+            metadata["identity_preservation_review"] = identity_review.to_dict()
+            if identity_review.should_reject:
+                record.provider_metadata = metadata
+                raise ProviderError(
+                    "The generated try-on changed the user's identity or visible body proportions.",
+                    code="identity_preservation_failed",
+                    provider=record.provider,
+                    retryable=False,
+                    details={"identity_preservation_review": identity_review.to_dict()},
+                )
 
         if final_path is not None:
             enhancement = enhance_result_image(
@@ -515,7 +738,7 @@ def process_job(
                 batch_id = record.provider_metadata.get("batch_id")
             sibling_paths: list[Path] = []
             if batch_id:
-                for sibling in list_jobs(settings, limit=500):
+                for sibling in list_batch_jobs(batch_id, settings):
                     if sibling.job_id == record.job_id or sibling.status != "completed":
                         continue
                     sibling_meta = sibling.provider_metadata if isinstance(sibling.provider_metadata, dict) else {}
@@ -539,6 +762,11 @@ def process_job(
             "VTON job %s failed",
             job_id,
         )
+
+        if exc.code == "identity_preservation_failed":
+            rejected_result_path = locals().get("final_path")
+            if isinstance(rejected_result_path, Path):
+                rejected_result_path.unlink(missing_ok=True)
 
         record.status = "failed"
         record.message = (
@@ -610,46 +838,14 @@ def process_job(
 
     finally:
         total_elapsed = time.perf_counter() - job_started
-        meta = record.provider_metadata if isinstance(record.provider_metadata, dict) else {}
-        upload_ms = float(meta.get("upload_ms", 0.0))
-        normalize_ms = float(meta.get("normalize_ms", 0.0))
-        person_validation_ms = float(meta.get("person_validation_ms", 0.0))
-        gemini_ms = float(meta.get("gemini_ms", 0.0))
-        geometry_ms = float(meta.get("geometry_ms", 0.0))
-        garment_analysis_ms = float(meta.get("garment_analysis_ms", 0.0))
-        decode_ms = float(meta.get("decode_ms", 0.0))
-        vertex_ms = float(meta.get("vertex_request_seconds", 0.0)) * 1000.0
-        candidate_decode_ms = float(meta.get("candidate_decode_ms", 0.0))
-        candidate_validation_ms = float(meta.get("candidate_validation_seconds", 0.0)) * 1000.0
-        identity_validation_ms = float(meta.get("identity_validation_ms", 0.0))
-        garment_validation_ms = float(meta.get("garment_validation_ms", 0.0))
-        candidate_selection_ms = candidate_validation_ms
-        cleanup_ms = max(0.0, (total_elapsed - queue_wait) * 1000.0 - vertex_ms - candidate_validation_ms)
-
-        print(
-            f"[PERF DETAIL] "
-            f"job={job_id} "
-            f"queue_wait_ms={queue_wait * 1000:.1f} "
-            f"upload_ms={upload_ms:.1f} "
-            f"decode_ms={decode_ms:.1f} "
-            f"normalize_ms={normalize_ms:.1f} "
-            f"person_validation_ms={person_validation_ms:.1f} "
-            f"geometry_ms={geometry_ms:.1f} "
-            f"garment_analysis_ms={garment_analysis_ms:.1f} "
-            f"gemini_ms={gemini_ms:.1f} "
-            f"vertex_ms={vertex_ms:.1f} "
-            f"candidate_decode_ms={candidate_decode_ms:.1f} "
-            f"identity_validation_ms={identity_validation_ms:.1f} "
-            f"garment_validation_ms={garment_validation_ms:.1f} "
-            f"candidate_selection_ms={candidate_selection_ms:.1f} "
-            f"cleanup_ms={cleanup_ms:.1f} "
-            f"total_ms={total_elapsed * 1000:.1f}"
-        )
-        print(
-            f"[PERF] job={job_id} total_job={total_elapsed:.2f}s "
-            f"queue_wait={queue_wait:.2f}s "
-            f"provider_calls={locals().get('provider_calls', 0)} "
-            f"retry_count={max(0, locals().get('provider_calls', 0) - 1)}"
+        logger.info(
+            "Job complete job=%s total_seconds=%.2f queue_wait_seconds=%.2f "
+            "provider_calls=%s retry_count=%s",
+            job_id,
+            total_elapsed,
+            queue_wait,
+            locals().get("provider_calls", 0),
+            max(0, locals().get("provider_calls", 0) - 1),
         )
         log_memory(f"after_job_cleanup job={job_id}")
         try:
@@ -666,3 +862,6 @@ def process_job(
                 ),
                 job_id,
             )
+
+        if generated_render_person is not None:
+            generated_render_person.unlink(missing_ok=True)

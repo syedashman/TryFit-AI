@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
 import httpx
+import numpy as np
 
 from app.core.config import Settings
+from app.services.http_client import get_http_client
 
 # gemini-2.5-flash-image ("nano banana") does identity-preserving image
 # editing/generation and is broadly available via the Vertex AI *global*
@@ -18,6 +23,7 @@ from app.core.config import Settings
 # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-image
 _POSE_MODEL = "gemini-2.5-flash-image"
 _POSE_MODEL_LOCATION = "global"
+_IDENTITY_REVIEW_MODEL = "gemini-2.5-flash"
 
 POSE_REFERENCES_DIR = Path(__file__).resolve().parent.parent / "static" / "pose_references"
 
@@ -55,6 +61,30 @@ POSE_PROMPTS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class IdentityPreservationReview:
+    identity: str
+    visible_body: str
+    confidence: float
+    reason: str
+
+    @property
+    def should_reject(self) -> bool:
+        return self.confidence >= 0.70 and (
+            self.identity == "mismatch"
+            or self.visible_body == "drifted"
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "identity": self.identity,
+            "visible_body": self.visible_body,
+            "confidence": self.confidence,
+            "reason": self.reason,
+            "rejected": self.should_reject,
+        }
+
+
 class PoseCustomizationError(Exception):
     """Raised when the pose-normalization step cannot be completed."""
 
@@ -87,22 +117,98 @@ def _encode(path: Path) -> tuple[str, str]:
     return mime_type, base64.b64encode(path.read_bytes()).decode("ascii")
 
 
+def _encode_face_crop(path: Path) -> tuple[str, str] | None:
+    image = cv2.imdecode(
+        np.frombuffer(path.read_bytes(), dtype=np.uint8),
+        cv2.IMREAD_COLOR,
+    )
+    if image is None:
+        return None
+
+    detector = cv2.CascadeClassifier(
+        str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+    )
+    faces = detector.detectMultiScale(
+        cv2.cvtColor(image, cv2.COLOR_BGR2GRAY),
+        scaleFactor=1.1,
+        minNeighbors=4,
+        minSize=(20, 20),
+    )
+    if not len(faces):
+        return None
+
+    x, y, width, height = max(faces, key=lambda box: box[2] * box[3])
+    side = int(max(width, height) * 2.0)
+    center_x = x + width // 2
+    center_y = y + height // 2
+    left = max(0, center_x - side // 2)
+    top = max(0, center_y - side // 2)
+    right = min(image.shape[1], center_x + side // 2)
+    bottom = min(image.shape[0], center_y + side // 2)
+    crop = image[top:bottom, left:right]
+    if crop.size == 0:
+        return None
+
+    resized = cv2.resize(crop, (384, 384), interpolation=cv2.INTER_CUBIC)
+    encoded, data = cv2.imencode(
+        ".jpg",
+        resized,
+        [cv2.IMWRITE_JPEG_QUALITY, 92],
+    )
+    if not encoded:
+        return None
+    return "image/jpeg", base64.b64encode(data).decode("ascii")
+
+
+def _body_geometry_instructions(
+    body_geometry: dict[str, object] | None,
+) -> str:
+    if not body_geometry:
+        return ""
+
+    measurements: list[str] = []
+    for field in (
+        "foreground_width_ratio",
+        "foreground_height_ratio",
+        "upper_width_ratio",
+        "middle_width_ratio",
+        "lower_width_ratio",
+        "subject_aspect_ratio",
+    ):
+        value = body_geometry.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if not 0.0 < value <= 2.0:
+            continue
+        if field.endswith("_width_ratio") and value == 1.0:
+            continue
+        measurements.append(f"{field}={value:.4f}")
+
+    if not measurements:
+        return ""
+
+    return (
+        "Image analysis of the first image measured these visible-source "
+        "geometry ratios: "
+        + ", ".join(measurements)
+        + ". Treat them only as constraints on body regions actually visible "
+        "in the first image; do not treat missing regions as measurements."
+    )
+
+
 def generate_posed_reference(
     settings: Settings,
     identity_paths: list[Path],
     pose_name: str,
     subject_description: str,
     output_dir: Path,
+    body_geometry: dict[str, object] | None = None,
 ) -> Path:
     """Generate a full-body image of the same person in a fixed target pose.
 
-    Uses Gemini 2.5 Flash Image: the shopper's uploaded photo is passed as
-    identity reference, plus a bundled reference photo showing the target
-    body pose, with a text instruction to render the same person (same
-    face, same body) in that pose, full body, neutral background. Raises
-    PoseCustomizationError on any failure — callers should catch this and
-    fall back to the shopper's own best photo rather than blocking
-    generation entirely.
+    Uses the uploaded photo and a text-only pose description. The bundled pose
+    photographs are deliberately not sent to Gemini, so their identity,
+    clothing, and body shape cannot leak into the generated person.
     """
     if pose_name not in POSE_PROMPTS:
         raise PoseCustomizationError(f"Unknown pose '{pose_name}'.")
@@ -110,41 +216,30 @@ def generate_posed_reference(
     if not settings.google_cloud_project:
         raise PoseCustomizationError("GOOGLE_CLOUD_PROJECT is not configured.")
 
-    control_image_path = POSE_REFERENCES_DIR / f"{pose_name}.jpg"
-    if not control_image_path.exists():
-        raise PoseCustomizationError(f"Missing bundled pose reference for '{pose_name}'.")
-
     identity_image = identity_paths[0]
     identity_mime, identity_b64 = _encode(identity_image)
-    control_mime, control_b64 = _encode(control_image_path)
 
     prompt = (
-        f"The first image shows {subject_description} — this is the exact "
-        "real person to render, not a similar-looking person. Study their "
-        "exact facial structure, eyes, eyebrows, nose shape, mouth, "
-        "jawline, facial hair (if any), skin tone, and hairstyle/hair "
-        "color closely before generating anything. Keep every one of "
-        "those features identical in the output — this must be "
-        "unmistakably recognizable as the same individual, not a generic "
-        "or idealized face. The second image shows only a body pose "
-        "reference (ignore its clothing, its face, and its identity "
-        "entirely, use it only for body posture and camera framing). "
-        f"Generate a new photorealistic full-body photo of the person from "
-        f"the first image, {POSE_PROMPTS[pose_name]}, matching the body "
-        "pose and camera framing of the second image. The output must show "
-        "the person head to feet with clear headroom above the head, "
+        f"The only person shown is {subject_description} from the uploaded "
+        "image. Preserve this exact person's visible facial identity, age, "
+        "skin tone, hair, build, and all visible body proportions. Do not "
+        "beautify, idealize, slim, widen, or otherwise change the person. "
+        "Keep body dimensions and silhouette grounded in the uploaded image; "
+        "infer only body parts that are not visible and only as needed to "
+        "complete the requested pose. No other person's image is provided "
+        "or may be used as an appearance reference. "
+        f"Render this same person in the following target pose: "
+        f"{POSE_PROMPTS[pose_name]} Generate a photorealistic full-body "
+        "photo, with the person head to feet and clear headroom above the head, "
         "plain neutral studio background, soft even lighting. CRITICAL: "
-        "do NOT dress them in the same outfit, pattern, print, color, or "
-        "fabric shown in the first image — completely replace their "
-        "clothing with a plain solid light-grey short-sleeve t-shirt and "
-        "plain solid dark-grey trousers, no patterns, no prints, no "
-        "embroidery, no dupatta or scarf, nothing draped over the "
-        "shoulders. This plain outfit will be digitally replaced with a "
-        "different garment in a later step, so it must stay completely "
-        "plain and simple. On their feet, simple formal brown leather "
-        "loafers (not sneakers, not sandals, not barefoot) — this exact "
-        "same shoe style every time. Output only the image."
+        "replace clothing with plain solid light-grey short-sleeve t-shirt "
+        "and plain solid dark-grey trousers, without patterns, prints, "
+        "embroidery, scarves, or draped fabric. Use simple plain footwear. "
+        "Output only the image."
     )
+    geometry_instructions = _body_geometry_instructions(body_geometry)
+    if geometry_instructions:
+        prompt += " " + geometry_instructions
 
     payload = {
         "contents": [
@@ -152,7 +247,6 @@ def generate_posed_reference(
                 "role": "user",
                 "parts": [
                     {"inline_data": {"mime_type": identity_mime, "data": identity_b64}},
-                    {"inline_data": {"mime_type": control_mime, "data": control_b64}},
                     {"text": prompt},
                 ],
             }
@@ -172,7 +266,7 @@ def generate_posed_reference(
     image_bytes: bytes | None = None
     for attempt in range(2):
         try:
-            response = httpx.post(
+            response = get_http_client().post(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
                 json=payload,
@@ -205,3 +299,141 @@ def generate_posed_reference(
     out_path = output_dir / f"pose_{pose_name}_{uuid.uuid4().hex}{ext}"
     out_path.write_bytes(image_bytes)
     return out_path
+
+
+def verify_person_preservation(
+    settings: Settings,
+    source_image: Path,
+    result_image: Path,
+) -> IdentityPreservationReview:
+    """Use Gemini only when local face comparison flags possible identity drift."""
+    if not settings.google_cloud_project:
+        raise PoseCustomizationError(
+            "GOOGLE_CLOUD_PROJECT is required for identity-preservation review."
+        )
+
+    source_mime, source_b64 = _encode(source_image)
+    result_mime, result_b64 = _encode(result_image)
+    source_face = _encode_face_crop(source_image)
+    result_face = _encode_face_crop(result_image)
+    face_parts: list[dict[str, object]] = []
+    if source_face is not None and result_face is not None:
+        face_parts = [
+            {
+                "text": (
+                    "Image 3 is an enlarged crop of the source person's face:"
+                )
+            },
+            {
+                "inline_data": {
+                    "mime_type": source_face[0],
+                    "data": source_face[1],
+                }
+            },
+            {
+                "text": (
+                    "Image 4 is an enlarged crop of the generated person's face:"
+                )
+            },
+            {
+                "inline_data": {
+                    "mime_type": result_face[0],
+                    "data": result_face[1],
+                }
+            },
+        ]
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"inline_data": {"mime_type": source_mime, "data": source_b64}},
+                    {"inline_data": {"mime_type": result_mime, "data": result_b64}},
+                    {
+                        "text": (
+                            "Compare image 2 with image 1. Image 1 is the user's "
+                            "source photo; image 2 is the try-on result and may "
+                            "have a different pose, framing, background, lighting, "
+                            "and clothing. When images 3 and 4 are present, they "
+                            "are enlarged face crops from images 1 and 2. Compare "
+                            "facial structure and distinctive features in those "
+                            "crops; do not call two people a match solely because "
+                            "their age, gender, hairstyle, or skin tone is similar. "
+                            "Judge whether the visible face and recognizable "
+                            "identity are the same person, and whether body "
+                            "proportions in regions visible in both full images "
+                            "were preserved. If facial identity cannot be verified, "
+                            "return uncertain rather than match. Do not penalize "
+                            "or infer differences for body regions not visible in "
+                            "image 1. Return only JSON with fields "
+                            '"identity" (match, mismatch, or uncertain), '
+                            '"visible_body" (preserved, drifted, or uncertain), '
+                            '"confidence" (number 0 through 1), and '
+                            '"reason" (short string).'
+                        )
+                    },
+                    *face_parts,
+                ],
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["TEXT"],
+            "responseMimeType": "application/json",
+        },
+    }
+    token = _access_token(settings)
+    project = settings.google_cloud_project
+    location = settings.google_cloud_location
+    url = (
+        f"https://{location}-aiplatform.googleapis.com/v1/"
+        f"projects/{project}/locations/{location}/"
+        f"publishers/google/models/{_IDENTITY_REVIEW_MODEL}:generateContent"
+    )
+    try:
+        response = get_http_client().post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+            timeout=60.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise PoseCustomizationError(
+            f"Gemini identity-preservation review request failed: {exc}"
+        ) from exc
+    try:
+        body = response.json()
+        parts = body["candidates"][0]["content"]["parts"]
+        response_text = next(
+            part["text"]
+            for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+        assessment = json.loads(response_text)
+    except (KeyError, IndexError, StopIteration, TypeError, ValueError) as exc:
+        raise PoseCustomizationError(
+            f"Gemini returned an invalid identity-preservation review: {exc}"
+        ) from exc
+
+    identity = assessment.get("identity")
+    visible_body = assessment.get("visible_body")
+    confidence = assessment.get("confidence")
+    reason = assessment.get("reason")
+    if (
+        identity not in {"match", "mismatch", "uncertain"}
+        or visible_body not in {"preserved", "drifted", "uncertain"}
+        or isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not 0.0 <= confidence <= 1.0
+        or not isinstance(reason, str)
+    ):
+        raise PoseCustomizationError(
+            "Gemini returned an identity-preservation review with invalid fields."
+        )
+
+    return IdentityPreservationReview(
+        identity=identity,
+        visible_body=visible_body,
+        confidence=float(confidence),
+        reason=reason,
+    )

@@ -19,7 +19,8 @@ export type TryFitStage =
   | "error";
 
 export const MIN_PHOTOS = 1;
-export const MAX_PHOTOS = 3;
+export const MAX_PHOTOS = 1;
+export const TRYFIT_OUTPUT_COUNT = 3;
 
 const POLL_INTERVAL_MS = 2500;
 
@@ -280,7 +281,7 @@ export function useTryFit({
     clearPoll();
     setStage("submitting");
     setErrorMessage(null);
-    setBatch(optimisticBatch(files.length));
+    setBatch(optimisticBatch(TRYFIT_OUTPUT_COUNT));
     setStage("processing");
     try {
       const preparedFiles = await Promise.all(
@@ -294,7 +295,10 @@ export function useTryFit({
         personImages: preparedFiles,
       });
       const realJobs = (res.jobs || []).filter((job) => isRealJobId(job.job_id));
-      if (realJobs.length !== files.length) {
+      if (
+        res.expected_outputs !== TRYFIT_OUTPUT_COUNT ||
+        realJobs.length !== TRYFIT_OUTPUT_COUNT
+      ) {
         throw new Error("Try Fit returned incomplete job information.");
       }
       setBatch((previous) =>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import threading
 
 if os.name == "nt":
@@ -12,6 +13,7 @@ else:
 
 _peak_rss_bytes = 0
 _peak_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 if os.name == "nt":
@@ -58,7 +60,12 @@ def log_memory(label: str) -> tuple[float, float]:
     try:
         current, peak = memory_snapshot()
     except Exception as exc:  # noqa: BLE001
-        print(f"[MEM] {label} unavailable={type(exc).__name__}")
+        logger.debug("Memory sample unavailable at %s: %s", label, type(exc).__name__)
         return 0.0, 0.0
-    print(f"[MEM] {label} rss_mb={current:.1f} peak_rss_mb={peak:.1f}")
+    logger.debug(
+        "Memory sample at %s: rss_mb=%.1f peak_rss_mb=%.1f",
+        label,
+        current,
+        peak,
+    )
     return current, peak

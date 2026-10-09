@@ -31,10 +31,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from app.core.config import Settings
 from app.services.phase3c2_quality import garment_structure_metrics
+from app.services.http_client import get_http_client
 from app.services.photo_category_check import (
     PhotoCategoryCheckError,
     _access_token,
@@ -282,7 +281,7 @@ def evaluate_garment_fidelity(
     }
 
     try:
-        response = httpx.post(
+        response = get_http_client().post(
             url,
             headers={"Authorization": f"Bearer {token}"},
             json=payload,

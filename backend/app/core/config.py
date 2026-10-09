@@ -23,6 +23,7 @@ class Settings(BaseSettings):
             "http://127.0.0.1:3000",
         ]
     )
+    cors_origin_regex: str | None = r"https://[a-z0-9-]+\.netlify\.app"
 
     allowed_image_types: list[str] = Field(
         default_factory=lambda: [
@@ -70,7 +71,7 @@ class Settings(BaseSettings):
 
     # Bounded concurrency for independent uploaded-photo jobs. Keeps one batch
     # responsive without hitting provider rate limits or memory spikes.
-    max_concurrent_jobs: int = 2
+    max_concurrent_jobs: int = 1
     tryfit_fast_mode: bool = False
     provider_max_image_dimension: int = 1536
     max_provider_long_side: int | None = None

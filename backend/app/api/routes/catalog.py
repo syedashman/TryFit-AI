@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import time
+import logging
+from copy import deepcopy
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Response, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.api.routes.jobs import _optional_float, _optional_int, _validate_upload
 from app.core.config import get_settings
@@ -18,11 +22,23 @@ from app.services.image_normalizer import normalize_for_provider
 from app.services.job_scheduler import job_scheduler
 from app.services.person_validation import validate_person_images
 from app.services.photo_category_check import check_photos_match_category
-from app.services.storage import list_jobs, load_job, save_job, save_upload
-from app.services.memory_metrics import log_memory, memory_snapshot
+from app.services.storage import (
+    list_batch_jobs,
+    load_job,
+    save_batch_job_ids,
+    save_job,
+    save_upload,
+)
+from app.services.memory_metrics import log_memory
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 QualityPreset = Literal["fast", "balanced", "high"]
+logger = logging.getLogger(__name__)
+_CATALOG_OUTPUTS = (
+    ("pose_1", "front"),
+    ("pose_2", "side"),
+    ("original", None),
+)
 
 
 def _catalog_root() -> Path:
@@ -74,9 +90,9 @@ def _product_payload(category: str, product_dir: Path) -> dict[str, object]:
     }
 
 
-@router.get("", operation_id="get_catalog")
-def get_catalog() -> dict[str, object]:
-    root = _catalog_root()
+@lru_cache(maxsize=1)
+def _build_catalog(root_path: str) -> dict[str, object]:
+    root = Path(root_path)
     categories: dict[str, list[dict[str, object]]] = {}
     for category in ("Men", "Women", "Kids"):
         category_dir = root / category
@@ -95,10 +111,19 @@ def get_catalog() -> dict[str, object]:
     }
 
 
+@router.get("", operation_id="get_catalog")
+def get_catalog(response: Response) -> dict[str, object]:
+    response.headers["Cache-Control"] = (
+        "public, max-age=300, stale-while-revalidate=3600"
+    )
+    catalog = _build_catalog(str(_catalog_root().resolve()))
+    return deepcopy(catalog)
+
+
 @router.post("/generate", operation_id="generate_catalog_tryon")
 async def generate_catalog_tryon(
     background_tasks: BackgroundTasks,
-    person_images: Annotated[list[UploadFile], File(description="Upload 1 to 3 clear images of the same person")],
+    person_images: Annotated[list[UploadFile], File(description="Upload one clear image of the person")],
     category: str = Form(...),
     product_number: str = Form(...),
     color: str = Form(...),
@@ -111,8 +136,14 @@ async def generate_catalog_tryon(
 ) -> dict[str, object]:
     settings = get_settings()
     log_memory("batch_start")
-    if not settings.effective_min_person_images <= len(person_images) <= settings.effective_max_person_images:
-        raise HTTPException(status_code=422, detail={"code": "invalid_person_image_count", "message": "Upload between 1 and 3 person images."})
+    if len(person_images) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_person_image_count",
+                "message": "Upload exactly one person image for three Try Fit outputs.",
+            },
+        )
     for upload in person_images:
         _validate_upload(upload, settings.allowed_image_types)
 
@@ -161,7 +192,8 @@ async def generate_catalog_tryon(
     person_paths: list[Path] = []
     try:
         for uploaded_path in raw_upload_paths:
-            normalized_path = normalize_for_provider(
+            normalized_path = await run_in_threadpool(
+                normalize_for_provider,
                 uploaded_path,
                 normalized_dir,
                 output_format=provider_format,
@@ -177,11 +209,12 @@ async def generate_catalog_tryon(
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 
     decode_resize_elapsed = time.perf_counter() - normalization_started
-    print(f"[PERF] batch preprocessing decode_resize={decode_resize_elapsed:.2f}s")
+    logger.debug("Batch preprocessing seconds=%.2f", decode_resize_elapsed)
     log_memory("after_upload_normalization")
 
     validation_started = time.perf_counter()
-    report = validate_person_images(
+    report = await run_in_threadpool(
+        validate_person_images,
         person_paths,
         min_images=settings.effective_min_person_images,
         max_images=settings.effective_max_person_images,
@@ -197,12 +230,17 @@ async def generate_catalog_tryon(
             path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail={"code": "person_images_rejected", "message": "Person image validation failed.", "validation": report.to_dict()})
     validation_elapsed = time.perf_counter() - validation_started
-    print(f"[PERF] batch person_validation={validation_elapsed:.2f}s")
+    logger.debug("Batch person validation seconds=%.2f", validation_elapsed)
 
     category_started = time.perf_counter()
-    category_ok, category_error = check_photos_match_category(settings, person_paths, category_name)
+    category_ok, category_error = await run_in_threadpool(
+        check_photos_match_category,
+        settings,
+        person_paths,
+        category_name,
+    )
     category_elapsed = time.perf_counter() - category_started
-    print(f"[PERF] batch category_validation={category_elapsed:.2f}s")
+    logger.debug("Batch category validation seconds=%.2f", category_elapsed)
     if not category_ok:
         for path in person_paths:
             path.unlink(missing_ok=True)
@@ -213,47 +251,66 @@ async def generate_catalog_tryon(
     if not isinstance(geometry_index, int) or geometry_index < 0 or geometry_index >= len(person_paths):
         geometry_index = report.selected_index or 0
     geometry_started = time.perf_counter()
-    person_geometry_profiles = [build_body_geometry_profile(path) for path in person_paths]
+    person_geometry_profiles = []
+    for path in person_paths:
+        person_geometry_profiles.append(
+            await run_in_threadpool(
+                build_body_geometry_profile,
+                path,
+            )
+        )
     geometry_elapsed = time.perf_counter() - geometry_started
-    print(f"[PERF] batch geometry_analysis={geometry_elapsed:.2f}s")
+    logger.debug("Batch geometry analysis seconds=%.2f", geometry_elapsed)
     geometry_profile = person_geometry_profiles[geometry_index]
 
     best_matched_person_index = geometry_index
     primary_garment_path = garment_paths[0]
     relative = primary_garment_path.relative_to(product_dir)
     color_name = relative.parts[0] if len(relative.parts) > 1 else "Default"
-    garment_path = normalize_for_provider(
+    garment_path = await run_in_threadpool(
+        normalize_for_provider,
         primary_garment_path,
         normalized_dir,
         output_format=provider_format,
         max_dimension=max_dimension,
     )
     garment_started = time.perf_counter()
-    analysis = analyze_garment(garment_path, garment_description, cloth_type)
+    analysis = await run_in_threadpool(
+        analyze_garment,
+        garment_path,
+        garment_description,
+        cloth_type,
+    )
     garment_elapsed = time.perf_counter() - garment_started
-    print(f"[PERF] batch garment_analysis={garment_elapsed:.2f}s cached=true")
+    logger.debug("Batch garment analysis seconds=%.2f", garment_elapsed)
     base_seed = parsed_seed if parsed_seed is not None else settings.hf_seed
 
     batch_id = uuid4().hex
     jobs: list[JobRecord] = []
     batch_started = time.perf_counter()
-    print(
-        f"[PERF] Batch {batch_id} queued: total_jobs={len(person_paths)} concurrency={settings.effective_concurrency}"
+    logger.info(
+        "Batch queued batch=%s outputs=%s concurrency=%s",
+        batch_id,
+        len(_CATALOG_OUTPUTS),
+        settings.effective_concurrency,
     )
-    print(f"[BATCH] created batch={batch_id} jobs={len(person_paths)} concurrency={settings.effective_concurrency}")
-    for index, person_path in enumerate(person_paths, start=1):
+    person_path = person_paths[geometry_index]
+    for index, (output_variant, pose_name) in enumerate(
+        _CATALOG_OUTPUTS,
+        start=1,
+    ):
         job_id = uuid4().hex
         record = JobRecord(
             job_id=job_id,
             provider=settings.vton_provider,
-            message=f"Queued {index} of {len(person_paths)}.",
+            message=f"Queued output {index} of {len(_CATALOG_OUTPUTS)}.",
             person_file=str(person_path),
-            person_files=[str(path) for path in person_paths],
+            person_files=[str(person_path)],
             slot_index=index - 1,
             selected_person_index=report.selected_index,
             validation_report=validation_data,
-            geometry_profile=person_geometry_profiles[index - 1].to_dict(),
-            geometry_reference_index=index - 1,
+            geometry_profile=geometry_profile.to_dict(),
+            geometry_reference_index=0,
             garment_file=str(garment_path),
             garment_description=(
                 f"{garment_description}; category {category_name}; selected color {color_name}. "
@@ -281,10 +338,12 @@ async def generate_catalog_tryon(
                 "catalog_pose": primary_garment_path.stem,
                 "catalog_reference": f"/static/catalog/{category_name}/{product_number}/{relative.as_posix()}",
                 "batch_index": index,
-                "batch_total": len(person_paths),
-                "person_source_index": index - 1,
-                "person_source_framing": str(report.images[index - 1].framing) if index - 1 < len(report.images) else "unknown",
-                "pose_source_strategy": "match_uploaded_photo_pose",
+                "batch_total": len(_CATALOG_OUTPUTS),
+                "person_source_index": geometry_index,
+                "person_source_framing": str(report.images[geometry_index].framing) if geometry_index < len(report.images) else "unknown",
+                "output_variant": output_variant,
+                "pose_reference_name": pose_name,
+                "pose_source_strategy": "pose_reference_only" if pose_name else "uploaded_photo_original_pose",
                 "age_neutral_validation": True,
                 "product_integrity_lock": True,
                 "selected_color_only": True,
@@ -298,7 +357,12 @@ async def generate_catalog_tryon(
         )
         save_job(record, settings)
         jobs.append(record)
-        print(f"[JOB] scheduling job={job_id} batch={batch_id} index={index}/{len(person_paths)}")
+        logger.debug(
+            "Scheduling job=%s batch=%s variant=%s",
+            job_id,
+            batch_id,
+            output_variant,
+        )
         job_scheduler.submit(
             job_id,
             settings,
@@ -308,23 +372,24 @@ async def generate_catalog_tryon(
         )
 
     batch_elapsed = time.perf_counter() - batch_started
-    print(f"[PERF] Batch {batch_id} scheduling complete: elapsed={batch_elapsed:.2f}s")
+    save_batch_job_ids(
+        batch_id,
+        [job.job_id for job in jobs],
+        settings,
+    )
+    logger.info("Batch scheduled batch=%s seconds=%.2f", batch_id, batch_elapsed)
     return {
         "batch_id": batch_id,
         "expected_outputs": len(jobs),
         "jobs": [job.model_dump() for job in jobs],
-        "message": f"{len(jobs)} Try Fit images queued, one per uploaded photo.",
+        "message": "Three independent Try Fit outputs queued.",
     }
 
 
 @router.get("/batch/{batch_id}", operation_id="get_catalog_batch_status")
 def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
     settings = get_settings()
-    jobs = []
-    for record in list_jobs(settings, limit=500):
-        metadata = record.provider_metadata if isinstance(record.provider_metadata, dict) else {}
-        if metadata.get("batch_id") == batch_id:
-            jobs.append(record)
+    jobs = list_batch_jobs(batch_id, settings)
     if not jobs:
         raise HTTPException(status_code=404, detail="Catalog batch not found.")
     latest_by_slot: dict[int, JobRecord] = {}
@@ -351,9 +416,7 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
                 job.error = "Job exceeded the allowed generation time and was marked failed to avoid a never-ending spinner."
                 job.error_code = "job_stale_timeout"
                 save_job(job, settings)
-        refreshed = load_job(job.job_id, settings)
-        if refreshed is not None:
-            refreshed_jobs.append(refreshed)
+        refreshed_jobs.append(job)
     jobs = refreshed_jobs
     counts = {status: sum(1 for item in jobs if item.status == status) for status in ("queued", "processing", "completed", "failed")}
     completed = counts["completed"]
@@ -379,21 +442,20 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
         for item in jobs
     )
     if all_finished:
-        log_memory("batch_complete")
-        current_rss, peak_rss = memory_snapshot()
         first_res_ms = (first_result_seconds * 1000) if first_result_seconds is not None else 0.0
         all_res_ms = (all_results_seconds * 1000) if all_results_seconds is not None else 0.0
         quality_rounds_total = sum(
             int((item.provider_metadata or {}).get("generation_rounds", 1))
             for item in jobs
         )
-        print(
-            f"[PERF BATCH] batch={batch_id} "
-            f"first_result_ms={first_res_ms:.1f} "
-            f"all_results_ms={all_res_ms:.1f} "
-            f"vertex_calls={vertex_calls_total} "
-            f"quality_rounds={quality_rounds_total} "
-            f"peak_rss_mb={peak_rss:.1f}"
+        logger.info(
+            "Batch complete batch=%s first_result_ms=%.1f all_results_ms=%.1f "
+            "provider_calls=%s quality_rounds=%s",
+            batch_id,
+            first_res_ms,
+            all_res_ms,
+            vertex_calls_total,
+            quality_rounds_total,
         )
     return {
         "batch_id": batch_id,
@@ -412,13 +474,10 @@ def get_catalog_batch_status(batch_id: str) -> dict[str, object]:
 @router.post("/retry/{job_id}", operation_id="retry_catalog_tryon_job")
 def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, object]:
     settings = get_settings()
-    print(f"[RETRY] request job={job_id}")
 
     original = load_job(job_id, settings)
     if original is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-
-    print(f"[RETRY] original person={original.person_file}")
 
     new_job_id = uuid4().hex
     new_seed = original.request_parameters.get("seed")
@@ -474,7 +533,14 @@ def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> d
         deleted_at=None,
     )
     save_job(record, settings)
-    print(f"[RETRY] scheduling job={new_job_id}")
+    original_batch_id = (original.provider_metadata or {}).get("batch_id")
+    if isinstance(original_batch_id, str) and original_batch_id:
+        save_batch_job_ids(
+            original_batch_id,
+            [new_job_id],
+            settings,
+        )
+    logger.info("Retry queued job=%s parent=%s", new_job_id, job_id)
     job_scheduler.submit(
         new_job_id,
         settings,
@@ -482,7 +548,6 @@ def retry_catalog_tryon_job(job_id: str, background_tasks: BackgroundTasks) -> d
         guidance_scale=record.request_parameters.get("guidance_scale", 0.0),
         seed=new_seed,
     )
-    print(f"[RETRY] scheduled job={new_job_id}")
     return {"job_id": new_job_id, "message": "Retrying this pose."}
 
 
@@ -500,7 +565,8 @@ async def replace_catalog_tryon_photo(
     old_person_path = Path(original.person_file)
     try:
         uploaded_path = await save_upload(photo, settings, f"replacement_{original.slot_index or 0}")
-        normalized_path = normalize_for_provider(
+        normalized_path = await run_in_threadpool(
+            normalize_for_provider,
             uploaded_path,
             settings.storage_dir / "normalized",
             min_width=settings.person_min_width,
@@ -509,7 +575,8 @@ async def replace_catalog_tryon_photo(
         )
         uploaded_path.unlink(missing_ok=True)
 
-        report = validate_person_images(
+        report = await run_in_threadpool(
+            validate_person_images,
             [normalized_path],
             min_images=1,
             max_images=1,
@@ -527,7 +594,10 @@ async def replace_catalog_tryon_photo(
                 detail={"code": "replacement_photo_rejected", "validation": report.to_dict()},
             )
 
-        replacement_profile = build_body_geometry_profile(normalized_path)
+        replacement_profile = await run_in_threadpool(
+            build_body_geometry_profile,
+            normalized_path,
+        )
         person_files = list(original.person_files)
         slot_index = original.slot_index
         if slot_index is not None and 0 <= slot_index < len(person_files):

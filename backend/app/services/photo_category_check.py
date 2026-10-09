@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-import httpx
 from PIL import Image
 
 from app.core.config import Settings
+from app.services.http_client import get_http_client
 
 # NOTE: Google periodically retires dated Gemini model aliases (see
 # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini
@@ -154,7 +154,7 @@ def check_photos_match_category(
     }
 
     try:
-        response = httpx.post(
+        response = get_http_client().post(
             url,
             headers={"Authorization": f"Bearer {token}"},
             json=payload,

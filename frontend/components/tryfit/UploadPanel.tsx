@@ -2,7 +2,11 @@
 
 import { useRef, useState } from "react";
 import CameraCapture from "@/components/CameraCapture";
-import { MAX_PHOTOS, MIN_PHOTOS } from "@/lib/useTryFit";
+import {
+  MAX_PHOTOS,
+  MIN_PHOTOS,
+  TRYFIT_OUTPUT_COUNT,
+} from "@/lib/useTryFit";
 import PhotoEditorModal from "./PhotoEditorModal";
 
 export default function UploadPanel({
@@ -53,7 +57,7 @@ export default function UploadPanel({
     <div>
       <h1 className="font-display text-[3.3rem] leading-[0.9] tracking-[-0.06em] text-[var(--tryfit-ink)]">See this look on you</h1>
       <p className="mt-3 max-w-xl text-base leading-relaxed text-[rgba(17,17,17,0.62)]">
-        Upload {MIN_PHOTOS}–{MAX_PHOTOS} clear photos. Each photo creates one Try Fit result.
+        Upload one clear photo. Try Fit creates three results using two guided poses and your original photo.
       </p>
 
       <section aria-label="Photo framing examples" className="mt-6">
@@ -91,7 +95,6 @@ export default function UploadPanel({
         <input
           ref={inputRef}
           type="file"
-          multiple
           accept="image/*"
           className="hidden"
           onChange={(event) => {
@@ -127,7 +130,7 @@ export default function UploadPanel({
       </div>
 
       <button disabled={!canSubmit} onClick={onGenerate} className="fabric-shimmer mt-7 w-full border border-[var(--tryfit-ink)] bg-[var(--tryfit-ink)] px-6 py-4 text-[0.7rem] font-medium uppercase tracking-[0.2em] text-[#f7f5f2] transition hover:bg-[var(--tryfit-olive)] disabled:cursor-not-allowed disabled:opacity-45">
-        Generate {fileCount} Try Fit{fileCount === 1 ? "" : "s"} →
+        Generate {TRYFIT_OUTPUT_COUNT} Try Fit results →
       </button>
       {fileCount > 0 && fileCount < MIN_PHOTOS && (
         <p className="mt-2 text-xs text-[rgba(17,17,17,0.6)]">Upload at least {MIN_PHOTOS} photos to continue.</p>

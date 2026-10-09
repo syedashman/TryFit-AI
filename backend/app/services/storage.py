@@ -126,6 +126,7 @@ def ensure_storage(
 ) -> None:
     for directory in (
         settings.jobs_dir,
+        settings.jobs_dir / "batches",
         settings.uploads_dir,
         settings.results_dir,
     ):
@@ -437,3 +438,84 @@ def list_jobs(
         except (OSError, json.JSONDecodeError, ValidationError):
             continue
     return records
+
+
+def save_batch_job_ids(
+    batch_id: str,
+    job_ids: list[str],
+    settings: Settings,
+) -> None:
+    """Persist the job IDs for a catalog batch without scanning all jobs per poll."""
+    ensure_storage(settings)
+    batch_path = (
+        settings.jobs_dir
+        / "batches"
+        / f"{_safe_job_id(batch_id)}.json"
+    )
+    with _lock:
+        existing_ids: list[str] = []
+        try:
+            existing = json.loads(batch_path.read_text(encoding="utf-8"))
+            if isinstance(existing, list):
+                existing_ids = [
+                    item for item in existing
+                    if isinstance(item, str) and item
+                ]
+        except (OSError, json.JSONDecodeError):
+            pass
+
+        merged_ids = list(dict.fromkeys([*existing_ids, *job_ids]))
+        temporary = batch_path.with_name(
+            f".{batch_path.name}.{uuid4().hex}.tmp"
+        )
+        try:
+            temporary.write_text(
+                json.dumps(merged_ids),
+                encoding="utf-8",
+            )
+            temporary.replace(batch_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def list_batch_jobs(
+    batch_id: str,
+    settings: Settings,
+) -> list[JobRecord]:
+    """Load only the records indexed for a batch, with a one-time legacy fallback."""
+    batch_path = (
+        settings.jobs_dir
+        / "batches"
+        / f"{_safe_job_id(batch_id)}.json"
+    )
+    try:
+        job_ids = json.loads(batch_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        job_ids = None
+
+    if not isinstance(job_ids, list) or not all(
+        isinstance(job_id, str) and job_id
+        for job_id in job_ids
+    ):
+        legacy_jobs = [
+            record
+            for record in list_jobs(settings, limit=500)
+            if (record.provider_metadata or {}).get("batch_id") == batch_id
+        ]
+        if legacy_jobs:
+            save_batch_job_ids(
+                batch_id,
+                [record.job_id for record in legacy_jobs],
+                settings,
+            )
+        return legacy_jobs
+
+    jobs: list[JobRecord] = []
+    for job_id in job_ids:
+        record = load_job(job_id, settings)
+        if (
+            record is not None
+            and (record.provider_metadata or {}).get("batch_id") == batch_id
+        ):
+            jobs.append(record)
+    return jobs

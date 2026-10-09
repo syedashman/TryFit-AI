@@ -17,7 +17,6 @@ class JobScheduler:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._executor: concurrent.futures.ThreadPoolExecutor | None = None
-        self._started = False
         self._active_job_ids: set[str] = set()
 
     def configure(self, *, max_workers: int) -> None:
@@ -27,7 +26,6 @@ class JobScheduler:
                     return
                 self.shutdown()
             self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-            self._started = True
             logger.info("[JOB] scheduler configured workers=%s", max_workers)
 
     def submit(
@@ -42,7 +40,6 @@ class JobScheduler:
         with self._lock:
             if job_id in self._active_job_ids:
                 logger.warning("JOB %s already scheduled -> skip duplicate scheduling", job_id)
-                print(f"JOB {job_id} already scheduled -> skip duplicate scheduling")
                 return
             if self._executor is None:
                 self.configure(max_workers=max(1, min(settings.effective_concurrency, 2)))
@@ -79,7 +76,6 @@ class JobScheduler:
         with self._lock:
             executor = self._executor
             self._executor = None
-            self._started = False
         if executor is not None:
             logger.info("[JOB] scheduler shutting down")
             executor.shutdown(wait=True, cancel_futures=False)

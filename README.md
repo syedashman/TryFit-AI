@@ -54,7 +54,7 @@ python -m venv venv
 # macOS / Linux:
 source venv/bin/activate
 
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 **Google Cloud auth** (one-time):
@@ -154,7 +154,8 @@ behavior, not something wrong in this codebase.
 ## 7. Runtime and persistence notes
 
 Catalog jobs are executed in-process by a bounded `ThreadPoolExecutor`. The
-default is `MAX_CONCURRENT_JOBS=2` (configurable from 1 to 3), so independent
+  default is `MAX_CONCURRENT_JOBS=1` (configurable from 1 to 3), so the backend
+  stays within tighter Render memory limits by default. Increase it only after
 uploaded photos can run concurrently without creating unlimited provider
 requests. One Vertex request asks for `VERTEX_CANDIDATE_COUNT` candidates
 (3 by default); the quality policy allows at most two same-photo generation

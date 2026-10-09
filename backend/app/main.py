@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -12,27 +13,20 @@ from app.core.logging import configure_logging
 from app.services.job_scheduler import job_scheduler
 from app.services.storage import ensure_storage
 from app.services.memory_metrics import log_memory
+from app.services.http_client import close_http_client
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    print(
-        f"[TRYFIT EFFECTIVE CONFIG] fast_mode={settings.tryfit_fast_mode} "
-        f"max_dimension={settings.effective_max_image_dimension} "
-        f"candidate_count={settings.effective_candidate_count} "
-        f"concurrency={settings.effective_concurrency} "
-        f"max_rounds={settings.effective_max_generation_rounds} "
-        f"debug_dumps={settings.effective_debug_image_dumps}"
-    )
-    print(
-        f"[TRYFIT UPLOAD CONFIG] min_person_images={settings.effective_min_person_images} "
-        f"max_person_images={settings.effective_max_person_images}"
-    )
-    print(
-        f"[STARTUP] storage={settings.storage_dir} "
-        f"workers={settings.effective_concurrency} "
-        f"fast_mode={settings.tryfit_fast_mode}"
+    logger.info(
+        "Starting TryFit fast_mode=%s max_dimension=%s candidates=%s workers=%s",
+        settings.tryfit_fast_mode,
+        settings.effective_max_image_dimension,
+        settings.effective_candidate_count,
+        settings.effective_concurrency,
     )
     log_memory("startup")
     ensure_storage(settings)
@@ -40,8 +34,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        print("[SHUTDOWN] TryFit worker scheduler stopping")
+        logger.info("Stopping TryFit workers")
         job_scheduler.shutdown()
+        close_http_client()
 
 
 configure_logging()
@@ -56,6 +51,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.models.job import JobRecord
@@ -82,7 +83,8 @@ async def create_job(
         for index, upload in enumerate(person_images, start=1):
             uploaded_path = await save_upload(upload, settings, f"person_{index}")
             person_paths.append(uploaded_path)
-            normalized_path = normalize_for_provider(
+            normalized_path = await run_in_threadpool(
+                normalize_for_provider,
                 uploaded_path,
                 normalized_dir,
                 min_width=settings.person_min_width,
@@ -92,7 +94,8 @@ async def create_job(
             uploaded_path.unlink(missing_ok=True)
             person_paths[-1] = normalized_path
         garment_upload_path = await save_upload(garment_image, settings, "garment")
-        garment_path = normalize_for_provider(
+        garment_path = await run_in_threadpool(
+            normalize_for_provider,
             garment_upload_path,
             normalized_dir,
             output_format="PNG",
@@ -105,7 +108,8 @@ async def create_job(
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 
     selected_cloth_type = cloth_type or settings.hf_cloth_type
-    report = validate_person_images(
+    report = await run_in_threadpool(
+        validate_person_images,
         person_paths,
         min_images=settings.effective_min_person_images,
         max_images=settings.effective_max_person_images,
@@ -132,9 +136,17 @@ async def create_job(
     if geometry_index is None or geometry_index < 0 or geometry_index >= len(person_paths):
         geometry_index = report.selected_index or 0
     geometry_reference = person_paths[geometry_index]
-    geometry_profile = build_body_geometry_profile(geometry_reference)
+    geometry_profile = await run_in_threadpool(
+        build_body_geometry_profile,
+        geometry_reference,
+    )
 
-    garment_analysis = analyze_garment(garment_path, garment_description, selected_cloth_type)
+    garment_analysis = await run_in_threadpool(
+        analyze_garment,
+        garment_path,
+        garment_description,
+        selected_cloth_type,
+    )
     commercial_instructions = build_commercial_instructions(
         garment_description, selected_cloth_type, garment_analysis.dominant_color_name
     )

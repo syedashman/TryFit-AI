@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-import json
+import logging
 import mimetypes
 import os
 import time
@@ -33,6 +33,9 @@ from app.services.candidate_selector import (
 from app.services.image_normalizer import (
     normalize_for_provider,
 )
+from app.services.http_client import get_http_client
+
+logger = logging.getLogger(__name__)
 
 
 class VertexTryOnProvider(VTONProvider):
@@ -202,34 +205,24 @@ class VertexTryOnProvider(VTONProvider):
     ) -> dict[str, Any]:
         parameters: dict[str, Any] = {
             "sampleCount": int(sample_count),
-            # Vertex Virtual Try-On may block person editing unless the
-            # permitted age category is explicitly supplied.
             "personGeneration": "allow-all",
         }
 
         if self.settings.vertex_storage_uri:
-            parameters["storageUri"] = (
-                self.settings.vertex_storage_uri
-            )
+            parameters["storageUri"] = self.settings.vertex_storage_uri
 
         return {
             "instances": [
                 {
                     "personImage": {
                         "image": {
-                            "bytesBase64Encoded":
-                                self._encode_image(
-                                    person_image
-                                )
+                            "bytesBase64Encoded": self._encode_image(person_image)
                         }
                     },
                     "productImages": [
                         {
                             "image": {
-                                "bytesBase64Encoded":
-                                    self._encode_image(
-                                        garment_image
-                                    )
+                                "bytesBase64Encoded": self._encode_image(garment_image)
                             }
                         }
                     ],
@@ -244,7 +237,6 @@ class VertexTryOnProvider(VTONProvider):
     ) -> ProviderError:
         try:
             body = response.json()
-
         except ValueError:
             body = response.text
 
@@ -462,7 +454,6 @@ class VertexTryOnProvider(VTONProvider):
         provider_format = self.settings.provider_image_format
         max_dim = self.settings.effective_max_image_dimension
 
-        decode_resize_started = time.perf_counter()
         person = normalize_for_provider(
             render_source,
             normalized_dir,
@@ -475,28 +466,6 @@ class VertexTryOnProvider(VTONProvider):
             normalized_dir,
             output_format=provider_format,
             max_dimension=max_dim,
-        )
-        print(
-            f"[PERF] job={request.job_id} decode_resize="
-            f"{time.perf_counter() - decode_resize_started:.2f}s"
-        )
-
-        with Image.open(person) as p_img:
-            person_width, person_height = p_img.size
-        with Image.open(garment) as g_img:
-            garment_width, garment_height = g_img.size
-
-        print(
-            "[JOB IDENTITY TRACE]",
-            {
-                "slot_index": request.slot_index,
-                "original_person_file": str(request.person_image),
-                "normalized_person_file": str(person),
-                "vertex_person_input": str(person),
-                "garment_input": str(garment),
-                "catalog_model_reference": str(garment),
-                "identity_reference": str(person),
-            },
         )
         if person.resolve() == garment.resolve():
             raise ProviderError(
@@ -521,8 +490,6 @@ class VertexTryOnProvider(VTONProvider):
             garment,
             candidate_count,
         )
-        payload_bytes = len(json.dumps(payload).encode("utf-8"))
-        payload_mb = round(payload_bytes / (1024 * 1024), 2)
 
         response: httpx.Response | None = None
         attempts = (
@@ -530,64 +497,19 @@ class VertexTryOnProvider(VTONProvider):
             + 1
         )
 
+        client = get_http_client()
         for attempt in range(attempts):
             try:
-                with httpx.Client(
-                    timeout=(
-                        self.settings
-                        .vertex_request_timeout_seconds
-                    )
-                ) as client:
-                    
-                    # Safe payload logging: structure and sizes only — never
-                    # the base64 image bytes or the bearer token. This lets a
-                    # request be triaged from logs without leaking credentials
-                    # or huge blobs.
-                    instances = payload.get("instances", [])
-                    instance_shape = []
-                    for inst in instances:
-                        person_b64 = (
-                            inst.get("personImage", {})
-                            .get("image", {})
-                            .get("bytesBase64Encoded", "")
-                        )
-                        products = inst.get("productImages", [])
-                        product_sizes = [
-                            len(
-                                p.get("image", {}).get(
-                                    "bytesBase64Encoded", ""
-                                )
-                            )
-                            for p in products
-                        ]
-                        instance_shape.append(
-                            {
-                                "personImage_b64_len": len(person_b64),
-                                "productImages_count": len(products),
-                                "productImage_b64_lens": product_sizes,
-                            }
-                        )
-                    print(
-                        "VERTEX PAYLOAD SHAPE:",
-                        {
-                            "top_level_keys": sorted(payload.keys()),
-                            "instances": instance_shape,
-                            "parameters": payload.get("parameters"),
-                        },
-                    )
-                    response = client.post(
-                        self.predict_url,
-                        headers={
-                            "Authorization":
-                                f"Bearer {token}",
-                            "Content-Type":
-                                "application/json; "
-                                "charset=utf-8",
-                            "X-TryFit-Request":
-                                "sprint-4-phase-3a",
-                        },
-                        json=payload,
-                    )
+                response = client.post(
+                    self.predict_url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=utf-8",
+                        "X-TryFit-Request": "sprint-4-phase-3a",
+                    },
+                    json=payload,
+                    timeout=self.settings.vertex_request_timeout_seconds,
+                )
 
             except (
                 httpx.TimeoutException,
@@ -641,10 +563,12 @@ class VertexTryOnProvider(VTONProvider):
 
         vertex_request_seconds = time.perf_counter() - vertex_request_started
         round_number = getattr(request, "attempt_index", 0) + 1
-        print(
-            f"[PERF] job={request.job_id} vertex_request="
-            f"{vertex_request_seconds:.2f}s "
-            f"provider_calls={attempt + 1}"
+        logger.info(
+            "Vertex request complete job=%s round=%s seconds=%.2f calls=%s",
+            request.job_id,
+            round_number,
+            vertex_request_seconds,
+            attempt + 1,
         )
 
         try:
@@ -695,14 +619,11 @@ class VertexTryOnProvider(VTONProvider):
                 )
             )
 
-        print(
-            f"[VERTEX PERF] job={request.job_id} round={round_number} "
-            f"sample_count={candidate_count} "
-            f"person_dimensions={person_width}x{person_height} "
-            f"garment_dimensions={garment_width}x{garment_height} "
-            f"payload_mb={payload_mb:.2f} "
-            f"request_seconds={vertex_request_seconds:.2f} "
-            f"response_candidates={len(candidate_paths)}"
+        logger.info(
+            "Vertex candidates decoded job=%s round=%s candidates=%s",
+            request.job_id,
+            round_number,
+            len(candidate_paths),
         )
 
         # Use exact normalized image sent to Vertex.
@@ -741,44 +662,21 @@ class VertexTryOnProvider(VTONProvider):
                     render_reference_profile,
                     full_body_reference_profile,
                     garment_reference_path=request.garment_image,
-                    identity_reference_path=person,
+                    identity_reference_path=(
+                        request.identity_reference_image or person
+                    ),
                     catalog_identity_reference_path=garment,
                 )
                 eligible_count = sum(1 for s in scores if not s.hard_rejected) if scores else 1
                 action = "accept" if eligible_count > 0 else "regenerate"
-                print(
-                    f"[QUALITY ROUND] job={request.job_id} round={round_number} "
-                    f"eligible_candidates={eligible_count} action={action}"
+                logger.info(
+                    "Candidate selection job=%s round=%s eligible=%s action=%s",
+                    request.job_id,
+                    round_number,
+                    eligible_count,
+                    action,
                 )
             except NoEligibleCandidateError as exc:
-                print(
-                    f"[QUALITY ROUND] job={request.job_id} round={round_number} "
-                    f"eligible_candidates=0 action=regenerate"
-                )
-                for score in exc.scores:
-                    print(
-                        "CANDIDATE",
-                        {
-                            "job_id": request.job_id,
-                            "slot_index": request.slot_index,
-                            "index": score.index,
-                            "candidate_index": score.index,
-                            "identity_score": round(score.identity_score, 3),
-                            "identity_reliable": score.identity_reliable,
-                            "catalog_face_score": round(score.catalog_face_score, 3),
-                            "catalog_leakage": score.catalog_leakage,
-                            "geometry": round(score.geometry_similarity, 3),
-                            "full_body": round(score.full_body_similarity, 3),
-                            "garment_color": round(score.garment_color_score, 3),
-                            "garment_structure": round(score.garment_structure_score, 3),
-                            "garment_length": round(score.garment_length_score, 3),
-                            "person_fidelity": score.identity_score,
-                            "hard_rejected": score.hard_rejected,
-                            "rejection_reasons": list(score.rejection_reasons or []),
-                            "final_score": score.final_score,
-                        },
-                    )
-                print("NO ELIGIBLE CANDIDATE")
                 garment_reasons = {
                     "garment_color_mismatch",
                     "garment_structure_mismatch",
@@ -805,10 +703,11 @@ class VertexTryOnProvider(VTONProvider):
                 ) from exc
             finally:
                 candidate_validation_seconds = time.perf_counter() - validation_started
-                print(
-                    f"[PERF] job={request.job_id} candidate_validation="
-                    f"{candidate_validation_seconds:.2f}s "
-                    f"candidate_count={len(candidate_paths)}"
+                logger.debug(
+                    "Candidate validation job=%s seconds=%.2f candidates=%s",
+                    request.job_id,
+                    candidate_validation_seconds,
+                    len(candidate_paths),
                 )
 
             candidate_scores = [
@@ -816,48 +715,6 @@ class VertexTryOnProvider(VTONProvider):
                 for item in scores
             ]
 
-            # Per-candidate diagnostic logging. This is intentionally verbose
-            # so a rejected batch can be triaged from logs alone.
-            print("PERSON USED:", str(person))
-            for s in scores:
-                print(
-                    "CANDIDATE",
-                    {
-                        "job_id": request.job_id,
-                        "slot_index": request.slot_index,
-                        "index": s.index,
-                        "identity_score": round(s.identity_score, 3),
-                        "identity_reliable": s.identity_reliable,
-                        "catalog_face_score": round(s.catalog_face_score, 3),
-                        "catalog_leakage": s.catalog_leakage,
-                        "geometry": round(
-                            s.geometry_similarity, 3
-                        ),
-                        "full_body": round(
-                            s.full_body_similarity, 3
-                        ),
-                        "color": round(
-                            s.garment_color_score, 3
-                        ),
-                        "structure": round(
-                            s.garment_structure_score, 3
-                        ),
-                        "length": round(
-                            s.garment_length_score, 3
-                        ),
-                        "long_violation":
-                            s.long_garment_violation,
-                        "long_garment_confidence":
-                            s.long_garment_confidence,
-                        "final": s.final_score,
-                        "person_fidelity": s.identity_score,
-                        "eligible": not s.hard_rejected,
-                        "hard_rejected": s.hard_rejected,
-                        "rejection_reasons": list(
-                            s.rejection_reasons or []
-                        ),
-                    },
-                )
         else:
             candidate_profile = (
                 build_body_geometry_profile(
@@ -931,10 +788,11 @@ class VertexTryOnProvider(VTONProvider):
                 else {}
             ),
         )
-        print(
-                f"SELECTED candidate={chosen_index} "
-                f"slot={request.slot_index} "
-                f"eligible={not bool(selected_score.get('hard_rejected'))}"
+        logger.info(
+            "Selected candidate job=%s index=%s eligible=%s",
+            request.job_id,
+            chosen_index,
+            not bool(selected_score.get("hard_rejected")),
         )
 
         if (
