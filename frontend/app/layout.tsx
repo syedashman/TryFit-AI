@@ -48,7 +48,7 @@ export default function RootLayout({
           <div className="mx-auto grid max-w-[1280px] gap-10 px-4 py-8 sm:px-6 lg:grid-cols-[1fr_auto] lg:px-8">
             <div>
               <div className="font-display text-[2rem] leading-none tracking-[-0.06em] text-[var(--tryfit-ink)]">TRYFIT</div>
-              <p className="mt-3 text-xs uppercase tracking-[0.18em] text-[var(--tryfit-muted)]">© 2024 TRYFIT. ALL RIGHTS RESERVED.</p>
+              <p className="mt-3 text-xs uppercase tracking-[0.18em] text-[var(--tryfit-muted)]">© 2026 TRYFIT. ALL RIGHTS RESERVED.</p>
             </div>
             <div className="grid grid-cols-2 gap-x-10 gap-y-2 text-[0.72rem] uppercase tracking-[0.12em] text-[var(--tryfit-muted)] sm:grid-cols-3 lg:grid-cols-5">
               <span>Men</span>
