@@ -6,5 +6,6 @@ gradio_client==1.11.0
 python-dotenv==1.1.1
 pydantic-settings==2.10.1
 google-auth>=2.40.0,<3.0.0
+requests>=2.32.4,<3.0.0
 httpx==0.28.1
 opencv-python-headless==4.13.0.92
