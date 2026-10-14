@@ -75,7 +75,7 @@ export default function ResultsPanel({
         </div>
       </div>
 
-      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {batch.jobs.map((job, idx) => (
           job.status === "queued" ||
           job.status === "processing" ||
@@ -102,7 +102,7 @@ export default function ResultsPanel({
           onClick={onReset}
           className="flex-1 rounded-md border border-emerald-deep px-6 py-3 text-sm font-semibold uppercase tracking-[0.1em] text-emerald-deep transition hover:bg-emerald-deep hover:text-parchment"
         >
-          Try Different Photos
+          Change Photo
         </button>
         {completedIndexes.length > 1 && (
           <button

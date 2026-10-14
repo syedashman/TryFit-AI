@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from app.api.routes.jobs import _optional_float, _optional_int, _validate_upload
 from app.core.config import get_settings
 from app.models.job import JobRecord
-from app.services.body_geometry import build_body_geometry_profile, geometry_similarity
+from app.services.body_geometry import build_body_geometry_profile
 from app.services.commercial_prompt import build_commercial_instructions
 from app.services.garment_analyzer import analyze_garment
 from app.services.image_normalizer import normalize_for_provider
@@ -34,11 +34,6 @@ from app.services.memory_metrics import log_memory
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 QualityPreset = Literal["fast", "balanced", "high"]
 logger = logging.getLogger(__name__)
-_CATALOG_OUTPUTS = (
-    ("pose_1", "front"),
-    ("pose_2", "side"),
-    ("original", None),
-)
 
 
 def _catalog_root() -> Path:
@@ -123,7 +118,7 @@ def get_catalog(response: Response) -> dict[str, object]:
 @router.post("/generate", operation_id="generate_catalog_tryon")
 async def generate_catalog_tryon(
     background_tasks: BackgroundTasks,
-    person_images: Annotated[list[UploadFile], File(description="Upload one clear image of the person")],
+    person_images: Annotated[list[UploadFile], File(description="Upload up to three personal photos; each receives its own try-on result")],
     category: str = Form(...),
     product_number: str = Form(...),
     color: str = Form(...),
@@ -136,12 +131,15 @@ async def generate_catalog_tryon(
 ) -> dict[str, object]:
     settings = get_settings()
     log_memory("batch_start")
-    if len(person_images) != 1:
+    if not 1 <= len(person_images) <= settings.effective_max_person_images:
         raise HTTPException(
             status_code=422,
             detail={
                 "code": "invalid_person_image_count",
-                "message": "Upload exactly one person image for three Try Fit outputs.",
+                "message": (
+                    "Upload between one and "
+                    f"{settings.effective_max_person_images} person images."
+                ),
             },
         )
     for upload in person_images:
@@ -213,43 +211,72 @@ async def generate_catalog_tryon(
     log_memory("after_upload_normalization")
 
     validation_started = time.perf_counter()
-    report = await run_in_threadpool(
-        validate_person_images,
-        person_paths,
-        min_images=settings.effective_min_person_images,
-        max_images=settings.effective_max_person_images,
-        min_width=settings.person_min_width,
-        min_height=settings.person_min_height,
-        min_sharpness=settings.person_min_sharpness,
-        identity_threshold=settings.identity_consistency_threshold,
-        identity_hard_reject_threshold=settings.identity_hard_reject_threshold,
-        cloth_type=cloth_type,
-    )
-    if not report.accepted or report.selected_file is None:
+    person_reports = []
+    for person_path in person_paths:
+        person_reports.append(
+            await run_in_threadpool(
+                validate_person_images,
+                [person_path],
+                min_images=1,
+                max_images=1,
+                min_width=settings.person_min_width,
+                min_height=settings.person_min_height,
+                min_sharpness=settings.person_min_sharpness,
+                identity_threshold=settings.identity_consistency_threshold,
+                identity_hard_reject_threshold=settings.identity_hard_reject_threshold,
+                cloth_type=cloth_type,
+            )
+        )
+    rejected_reports = [
+        report.to_dict()
+        for report in person_reports
+        if not report.accepted or report.selected_file is None
+    ]
+    if rejected_reports:
         for path in person_paths:
             path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail={"code": "person_images_rejected", "message": "Person image validation failed.", "validation": report.to_dict()})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "person_images_rejected",
+                "message": "One or more person images failed validation.",
+                "validation": rejected_reports,
+            },
+        )
     validation_elapsed = time.perf_counter() - validation_started
     logger.debug("Batch person validation seconds=%.2f", validation_elapsed)
 
     category_started = time.perf_counter()
-    category_ok, category_error = await run_in_threadpool(
-        check_photos_match_category,
-        settings,
-        person_paths,
-        category_name,
-    )
+    category_results = []
+    for person_path in person_paths:
+        category_results.append(
+            await run_in_threadpool(
+                check_photos_match_category,
+                settings,
+                [person_path],
+                category_name,
+            )
+        )
     category_elapsed = time.perf_counter() - category_started
     logger.debug("Batch category validation seconds=%.2f", category_elapsed)
-    if not category_ok:
+    category_errors = [
+        error
+        for is_match, error in category_results
+        if not is_match
+    ]
+    if category_errors:
         for path in person_paths:
             path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail={"code": "photo_category_mismatch", "message": category_error})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "photo_category_mismatch",
+                "message": "; ".join(
+                    error for error in category_errors if error
+                ),
+            },
+        )
 
-    validation_data = report.to_dict()
-    geometry_index = validation_data.get("geometry_reference_index")
-    if not isinstance(geometry_index, int) or geometry_index < 0 or geometry_index >= len(person_paths):
-        geometry_index = report.selected_index or 0
     geometry_started = time.perf_counter()
     person_geometry_profiles = []
     for path in person_paths:
@@ -261,9 +288,6 @@ async def generate_catalog_tryon(
         )
     geometry_elapsed = time.perf_counter() - geometry_started
     logger.debug("Batch geometry analysis seconds=%.2f", geometry_elapsed)
-    geometry_profile = person_geometry_profiles[geometry_index]
-
-    best_matched_person_index = geometry_index
     primary_garment_path = garment_paths[0]
     relative = primary_garment_path.relative_to(product_dir)
     color_name = relative.parts[0] if len(relative.parts) > 1 else "Default"
@@ -291,24 +315,46 @@ async def generate_catalog_tryon(
     logger.info(
         "Batch queued batch=%s outputs=%s concurrency=%s",
         batch_id,
-        len(_CATALOG_OUTPUTS),
+        len(person_paths),
         settings.effective_concurrency,
     )
-    person_path = person_paths[geometry_index]
-    for index, (output_variant, pose_name) in enumerate(
-        _CATALOG_OUTPUTS,
-        start=1,
+    for person_index, (person_path, report) in enumerate(
+        zip(person_paths, person_reports, strict=True)
     ):
+        output_variant = "original"
+        output_index = person_index + 1
+        geometry_profile = person_geometry_profiles[person_index]
+        person_validation_data = report.to_dict()
+        image_reports = person_validation_data.get("images")
+        image_report = image_reports[0] if isinstance(image_reports, list) and image_reports else None
+        if isinstance(image_report, dict):
+            image_report["reference_role"] = "direct_tryon_source"
+            person_validation_data.update(
+                {
+                    "image_count": 1,
+                    "selected_index": 0,
+                    "selected_file": str(person_path),
+                    "selected_framing": image_report.get("framing"),
+                    "selection_mode": "direct_upload_mapping",
+                    "selection_reason": (
+                        f"Using uploaded photo {output_index} for its corresponding result."
+                    ),
+                    "identity_reference_index": 0,
+                    "geometry_reference_index": 0,
+                    "pose_reference_index": 0,
+                    "images": [image_report],
+                }
+            )
         job_id = uuid4().hex
         record = JobRecord(
             job_id=job_id,
             provider=settings.vton_provider,
-            message=f"Queued output {index} of {len(_CATALOG_OUTPUTS)}.",
+            message=f"Queued result {output_index} of {len(person_paths)}.",
             person_file=str(person_path),
             person_files=[str(person_path)],
-            slot_index=index - 1,
-            selected_person_index=report.selected_index,
-            validation_report=validation_data,
+            slot_index=person_index,
+            selected_person_index=0,
+            validation_report=person_validation_data,
             geometry_profile=geometry_profile.to_dict(),
             geometry_reference_index=0,
             garment_file=str(garment_path),
@@ -317,8 +363,8 @@ async def generate_catalog_tryon(
                 "Preserve the complete product identity exactly: all garment pieces, silhouette, length, neckline, "
                 "collar, sleeves, cuffs, closures, embroidery, print, texture, fabric, trim, matching bottoms and layers. "
                 "Never reinterpret a complete outfit as an upper-only shirt and never remove a product component. "
-                "Keep the shopper's own uploaded pose, framing, and camera angle exactly as-is — only replace their "
-                f"clothing with this product. Use catalog composition reference {primary_garment_path.stem}."
+                "Keep the shopper's uploaded pose, framing, and camera angle; replace only their clothing with this product."
+                " Use the selected catalog image only as the garment reference."
             ),
             cloth_type=cloth_type,
             show_type="result only",
@@ -328,7 +374,7 @@ async def generate_catalog_tryon(
             request_parameters={
                 "num_inference_steps": parsed_steps if parsed_steps is not None else preset["num_inference_steps"],
                 "guidance_scale": parsed_guidance if parsed_guidance is not None else preset["guidance_scale"],
-                "seed": base_seed + index - 1,
+                "seed": base_seed + person_index,
             },
             provider_metadata={
                 "batch_id": batch_id,
@@ -337,13 +383,13 @@ async def generate_catalog_tryon(
                 "catalog_color": color_name,
                 "catalog_pose": primary_garment_path.stem,
                 "catalog_reference": f"/static/catalog/{category_name}/{product_number}/{relative.as_posix()}",
-                "batch_index": index,
-                "batch_total": len(_CATALOG_OUTPUTS),
-                "person_source_index": geometry_index,
-                "person_source_framing": str(report.images[geometry_index].framing) if geometry_index < len(report.images) else "unknown",
+                "batch_index": output_index,
+                "batch_total": len(person_paths),
+                "person_source_index": person_index,
+                "person_source_framing": str(report.images[0].framing) if report.images else "unknown",
                 "output_variant": output_variant,
-                "pose_reference_name": pose_name,
-                "pose_source_strategy": "pose_reference_only" if pose_name else "uploaded_photo_original_pose",
+                "pose_reference_name": None,
+                "pose_source_strategy": "uploaded_photo_original_pose",
                 "age_neutral_validation": True,
                 "product_integrity_lock": True,
                 "selected_color_only": True,
@@ -380,9 +426,9 @@ async def generate_catalog_tryon(
     logger.info("Batch scheduled batch=%s seconds=%.2f", batch_id, batch_elapsed)
     return {
         "batch_id": batch_id,
-        "expected_outputs": len(jobs),
+        "expected_outputs": len(person_paths),
         "jobs": [job.model_dump() for job in jobs],
-        "message": "Three independent Try Fit outputs queued.",
+        "message": f"Queued {len(jobs)} Try Fit result(s), one for each uploaded photo.",
     }
 
 

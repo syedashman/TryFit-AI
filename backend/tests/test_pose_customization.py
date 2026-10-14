@@ -92,6 +92,15 @@ def test_pose_stage_uses_only_user_image_and_source_geometry(
     settings = _fake_settings("demo-project")
     monkeypatch.setattr(pose_customization, "_access_token", lambda _: "token")
     monkeypatch.setattr(pose_customization, "get_http_client", lambda: Client())
+    face_crop = (
+        "image/jpeg",
+        base64.b64encode(b"face crop").decode("ascii"),
+    )
+    monkeypatch.setattr(
+        pose_customization,
+        "_encode_face_crop",
+        lambda path: face_crop,
+    )
 
     body_geometry = {
         "foreground_width_ratio": 0.32,
@@ -113,12 +122,19 @@ def test_pose_stage_uses_only_user_image_and_source_geometry(
     request_parts = payloads[0]["contents"][0]["parts"]
     image_parts = [part for part in request_parts if "inline_data" in part]
     prompt = next(part["text"] for part in request_parts if "text" in part)
-    assert len(image_parts) == 1
+    assert len(image_parts) == 2
     assert image_parts[0]["inline_data"]["data"] == base64.b64encode(
         user_photo.read_bytes()
     ).decode("ascii")
+    assert image_parts[1]["inline_data"] == {
+        "mime_type": face_crop[0],
+        "data": face_crop[1],
+    }
     assert "only person shown" in prompt
-    assert "Preserve this exact person's visible facial identity" in prompt
+    assert "authoritative facial reference" in prompt
+    assert "Do not alter facial structure" in prompt
+    assert "Match the uploaded image's natural lighting" in prompt
+    assert "Avoid studio backdrops" in prompt
     assert "infer only body parts that are not visible" in prompt
     assert "No other person's image is provided" in prompt
     assert "foreground_width_ratio=0.3200" in prompt

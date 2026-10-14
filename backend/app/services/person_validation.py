@@ -378,6 +378,17 @@ def _classify_framing(
 
     if detector == "opencv_hog_person":
         if (
+            canvas_tallness >= 1.60
+            and body_score >= 0.90
+            and subject_height_ratio >= 0.48
+            and subject_aspect_ratio <= 0.52
+        ):
+            return (
+                "full_body",
+                round(face_score, 4),
+            )
+
+        if (
             subject_height_ratio >= 0.58
             and subject_aspect_ratio <= 0.68
         ):

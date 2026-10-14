@@ -16,7 +16,9 @@ from app.providers.factory import get_vton_provider
 from app.services.quality_engine import (
     evaluate_candidate,
 )
-from app.services.visual_quality import enhance_result_image
+from app.services.visual_quality import (
+    enhance_result_image,
+)
 from app.services.phase3c2_quality import build_phase3c2_report
 from app.services.body_geometry import build_body_geometry_profile
 from app.services.image_normalizer import normalize_for_provider

@@ -1,7 +1,9 @@
 from dataclasses import replace
 from pathlib import Path
 import pytest
+import numpy as np
 from PIL import Image, ImageDraw
+import app.services.body_geometry as body_geometry
 from app.core.config import Settings
 from app.services.body_geometry import (
     build_body_geometry_profile,
@@ -26,6 +28,28 @@ def test_geometry_profile_prefers_reference_like_candidate(tmp_path: Path) -> No
     winner, scores = choose_best_candidate([wide, close], build_body_geometry_profile(reference))
     assert winner == close
     assert scores[1].geometry_similarity > scores[0].geometry_similarity
+
+
+def test_partial_hog_detection_keeps_detected_person_bbox(
+    monkeypatch,
+) -> None:
+    image = np.zeros((1378, 719, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        body_geometry,
+        "_hog_person_bbox",
+        lambda rgb: (293, 352, 484, 735),
+    )
+    monkeypatch.setattr(
+        body_geometry,
+        "_saliency_bbox",
+        lambda rgb: (86, 193, 632, 1314),
+    )
+
+    bbox, detector = body_geometry._subject_bbox(image)
+
+    assert bbox == (293, 352, 484, 735)
+    assert detector == "opencv_hog_person"
+
 
 def test_geometry_similarity_is_bounded(tmp_path: Path) -> None:
     a, b = tmp_path / "a.png", tmp_path / "b.png"

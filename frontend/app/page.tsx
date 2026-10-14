@@ -3,9 +3,10 @@
 import { Suspense, useEffect, useRef } from "react";
 import { gsap } from "gsap";
 import CatalogBrowser from "@/components/CatalogBrowser";
+import { API_BASE } from "@/lib/api";
 import { prefersReducedMotion } from "@/lib/tryfit";
 
-const HERO_IMAGE = "http://127.0.0.1:8001/static/catalog/Women/1/010.webp";
+const HERO_IMAGE = `${API_BASE}/static/catalog/Women/1/010.webp`;
 
 export default function HomePage() {
   const heroRef = useRef<HTMLElement | null>(null);

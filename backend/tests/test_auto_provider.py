@@ -34,3 +34,15 @@ def test_auto_provider_falls_back(monkeypatch, tmp_path):
     assert result.endpoint_used == "catvton:/submit_function"
     assert first.generate.called
     assert second.generate.called
+    assert result.metadata["fallback_failures"] == [
+        {
+            "provider": "vertex",
+            "error": {
+                "code": "first",
+                "message": "first failed",
+                "provider": None,
+                "retryable": False,
+                "details": {},
+            },
+        }
+    ]

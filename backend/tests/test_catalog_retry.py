@@ -11,7 +11,7 @@ from app.api.routes import catalog as catalog_route
 from app.core.config import Settings
 from app.main import app
 from app.models.job import JobRecord
-from app.providers.base import ProviderError
+from app.providers.base import ProviderError, TryOnResult
 from app.services import job_service
 from app.services.pose_customization import PoseCustomizationError
 from app.services.storage import (
@@ -93,9 +93,11 @@ def test_batch_job_index_avoids_directory_scan(tmp_path: Path, monkeypatch) -> N
     ]
 
 
-def test_catalog_generate_queues_three_outputs_from_one_photo(
+@pytest.mark.parametrize("photo_count", [1, 2, 3])
+def test_catalog_generate_maps_each_photo_to_its_own_same_pose_tryon(
     tmp_path: Path,
     monkeypatch,
+    photo_count: int,
 ) -> None:
     settings = Settings(_env_file=None, storage_dir=tmp_path / "storage")
     catalog_root = tmp_path / "catalog"
@@ -109,15 +111,17 @@ def test_catalog_generate_queues_three_outputs_from_one_photo(
         / "front.jpg"
     )
     (garment_dir / "01.jpg").write_bytes(garment_source.read_bytes())
-    person_source = (
-        Path(__file__).resolve().parents[1]
-        / "SAMPLE_TEST_IMAGES"
-        / "person_1_full_body.webp"
-    )
+    sample_dir = Path(__file__).resolve().parents[1] / "SAMPLE_TEST_IMAGES"
+    person_source = sample_dir / "person_1_full_body.webp"
     submitted: list[str] = []
 
     monkeypatch.setattr(catalog_route, "get_settings", lambda: settings)
     monkeypatch.setattr(catalog_route, "_catalog_root", lambda: catalog_root)
+    monkeypatch.setattr(
+        catalog_route,
+        "check_photos_match_category",
+        lambda *_args: (True, None),
+    )
     monkeypatch.setattr(
         catalog_route.job_scheduler,
         "submit",
@@ -128,31 +132,160 @@ def test_catalog_generate_queues_three_outputs_from_one_photo(
         response = client.post(
             "/api/catalog/generate",
             data={"category": "men", "product_number": "12", "color": "Default"},
-            files={
-                "person_images": (
-                    "person.webp",
-                    person_source.read_bytes(),
-                    "image/webp",
+            files=[
+                (
+                    "person_images",
+                    (
+                        person_source.name,
+                        person_source.read_bytes(),
+                        "image/webp",
+                    ),
                 )
-            },
+                for _ in range(photo_count)
+            ],
         )
 
     assert response.status_code == 200, response.text
     payload = response.json()
     jobs = payload["jobs"]
-    assert payload["expected_outputs"] == 3
-    assert len(jobs) == len(submitted) == 3
+    assert payload["expected_outputs"] == photo_count
+    assert len(jobs) == len(submitted) == photo_count
     assert [job["provider_metadata"]["output_variant"] for job in jobs] == [
-        "pose_1",
-        "pose_2",
-        "original",
+        "original"
+    ] * photo_count
+    assert [
+        job["provider_metadata"]["pose_reference_name"] for job in jobs
+    ] == [None] * photo_count
+    assert [
+        job["provider_metadata"]["pose_source_strategy"] for job in jobs
+    ] == ["uploaded_photo_original_pose"] * photo_count
+    assert [
+        job["provider_metadata"]["person_source_index"] for job in jobs
+    ] == list(range(photo_count))
+    assert [job["selected_person_index"] for job in jobs] == [0] * photo_count
+    assert [job["geometry_reference_index"] for job in jobs] == [0] * photo_count
+    assert all(
+        "Use the selected catalog image only as the garment reference."
+        in job["garment_description"]
+        for job in jobs
+    )
+    assert all("pose guide" not in job["garment_description"] for job in jobs)
+    assert [job["person_file"] for job in jobs] == [
+        job["person_files"][0] for job in jobs
     ]
-    assert [job["provider_metadata"]["pose_reference_name"] for job in jobs] == [
-        "front",
-        "side",
-        None,
+    assert len({job["person_file"] for job in jobs}) == photo_count
+    assert [
+        job["validation_report"]["selected_file"] for job in jobs
+    ] == [job["person_file"] for job in jobs]
+    assert all(job["validation_report"]["image_count"] == 1 for job in jobs)
+
+
+def test_catalog_generate_rejects_more_than_three_uploaded_photos(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(_env_file=None, storage_dir=tmp_path / "storage")
+    monkeypatch.setattr(catalog_route, "get_settings", lambda: settings)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/catalog/generate",
+            data={"category": "men", "product_number": "12", "color": "Default"},
+            files=[
+                (
+                    "person_images",
+                    (f"person-{index}.webp", b"not-read-before-count-check", "image/webp"),
+                )
+                for index in range(4)
+            ],
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_person_image_count"
+
+
+def test_catalog_photo_jobs_fail_independently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(_env_file=None, storage_dir=tmp_path / "storage")
+    garment = tmp_path / "garment.png"
+    Image.new("RGB", (120, 160), (20, 30, 40)).save(garment)
+    records: list[JobRecord] = []
+    for index in range(3):
+        person = tmp_path / f"person-{index}.png"
+        Image.new("RGB", (120, 160), (60 + index, 80, 100)).save(person)
+        record = JobRecord(
+            job_id=f"slot-{index}",
+            provider="vertex",
+            person_file=str(person),
+            person_files=[str(person)],
+            slot_index=index,
+            geometry_profile={"source_file": str(person)},
+            geometry_reference_index=0,
+            garment_file=str(garment),
+            provider_metadata={
+                "batch_id": "independent-failures",
+                "batch_index": index + 1,
+                "batch_total": 3,
+                "person_source_index": index,
+                "pose_source_strategy": "uploaded_photo_original_pose",
+            },
+        )
+        save_job(record, settings)
+        records.append(record)
+
+    class IsolatedProvider:
+        name = "test"
+
+        def generate(self, request):
+            slot = request.slot_index
+            assert slot is not None
+            assert request.person_image == Path(records[slot].person_file)
+            if slot == 1:
+                raise ProviderError(
+                    "Provider rejected this one image.",
+                    code="provider_image_rejected",
+                )
+            result_path = tmp_path / f"provider-result-{slot}.png"
+            shutil.copyfile(request.person_image, result_path)
+            return TryOnResult(image_path=result_path)
+
+    class Report:
+        def to_dict(self):
+            return {}
+
+    monkeypatch.setattr(job_service, "get_vton_provider", lambda _settings: IsolatedProvider())
+    monkeypatch.setattr(job_service, "_needs_identity_review", lambda _metadata: False)
+    monkeypatch.setattr(
+        job_service,
+        "enhance_result_image",
+        lambda *_args, **_kwargs: Report(),
+    )
+    monkeypatch.setattr(job_service, "evaluate_candidate", lambda *_args: Report())
+    monkeypatch.setattr(job_service, "build_phase3c2_report", lambda **_kwargs: {})
+    monkeypatch.setattr(job_service, "log_memory", lambda *_args: None)
+
+    for record in records:
+        job_service.process_job(
+            record.job_id,
+            settings,
+            num_inference_steps=1,
+            guidance_scale=1.0,
+            seed=record.slot_index or 0,
+        )
+
+    saved = [load_job(record.job_id, settings) for record in records]
+    assert [record.status for record in saved if record is not None] == [
+        "completed",
+        "failed",
+        "completed",
     ]
-    assert len({job["person_file"] for job in jobs}) == 1
+    assert [record.person_file for record in saved if record is not None] == [
+        record.person_file for record in records
+    ]
+    assert saved[1] is not None
+    assert saved[1].error_code == "provider_image_rejected"
 
 
 def test_pose_job_uses_user_photo_as_identity_and_pose_output_as_geometry(
@@ -231,6 +364,36 @@ def test_pose_synthesis_failure_is_scoped_to_that_job(
     assert error.value.code == "pose_synthesis_failed"
     assert error.value.retryable is True
     assert error.value.details["pose_reference_name"] == "front"
+
+
+@pytest.mark.parametrize("source_framing", ["face", "upper_body", "three_quarter"])
+@pytest.mark.parametrize("pose_name", ["front", "side"])
+def test_predefined_pose_accepts_cropped_source_images(
+    tmp_path: Path,
+    monkeypatch,
+    source_framing: str,
+    pose_name: str,
+) -> None:
+    settings = Settings(_env_file=None, storage_dir=tmp_path / "storage")
+    record = _job_record(tmp_path, job_id=f"pose-{source_framing}-{pose_name}")
+    record.provider_metadata.update(
+        {
+            "pose_reference_name": pose_name,
+            "person_source_framing": source_framing,
+        }
+    )
+
+    def fail_pose(*args, **kwargs):
+        raise PoseCustomizationError("stop after cropped source is accepted")
+
+    monkeypatch.setattr(job_service, "generate_posed_reference", fail_pose)
+
+    with pytest.raises(ProviderError) as error:
+        job_service._prepare_pose_render_person(record, settings)
+
+    assert error.value.code == "pose_synthesis_failed"
+    assert error.value.retryable is True
+    assert error.value.details["pose_reference_name"] == pose_name
 
 
 def test_original_variant_skips_pose_synthesis(tmp_path: Path, monkeypatch) -> None:

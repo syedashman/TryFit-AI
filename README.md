@@ -2,8 +2,8 @@
 
 This package has two parts:
 
-- **`backend/`** — FastAPI service that talks to Google Vertex AI's Virtual
-  Try-On model (with a CatVTON fallback). This was already built in earlier
+- **`backend/`** — FastAPI service that uses Google Vertex AI's Virtual Try-On
+  model first, with CatVTON as a fallback. This was already built in earlier
   sprints; it's included here unchanged (minus the old venv, cache files,
   and generated test data).
 - **`frontend/`** — a brand-new Next.js (React) storefront demo, built to

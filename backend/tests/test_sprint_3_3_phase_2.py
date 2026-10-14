@@ -3,7 +3,10 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from app.services.person_validation import validate_person_images
+from app.services.person_validation import (
+    _classify_framing,
+    validate_person_images,
+)
 
 
 def _make_portrait(path: Path, shift: int = 0) -> None:
@@ -161,6 +164,34 @@ def test_adaptive_selection_uses_body_mode_for_full_body_set(tmp_path: Path) -> 
     assert report.accepted is True
     assert report.selection_mode == "body_focus"
     assert report.selected_framing in {"full_body", "three_quarter"}
+
+
+def test_tall_narrow_hog_detection_is_classified_as_full_body() -> None:
+    image = Image.new("RGB", (575, 968), (30, 30, 30))
+
+    framing, _ = _classify_framing(
+        image,
+        body_score=0.94,
+        subject_height_ratio=0.4845,
+        subject_aspect_ratio=0.5011,
+        detector="opencv_hog_person",
+    )
+
+    assert framing == "full_body"
+
+
+def test_three_quarter_hog_detection_stays_three_quarter() -> None:
+    image = Image.new("RGB", (600, 900), (30, 30, 30))
+
+    framing, _ = _classify_framing(
+        image,
+        body_score=0.94,
+        subject_height_ratio=0.50,
+        subject_aspect_ratio=0.70,
+        detector="opencv_hog_person",
+    )
+
+    assert framing == "three_quarter"
 
 
 def test_mixed_set_uses_balanced_quality_mode(tmp_path: Path) -> None:

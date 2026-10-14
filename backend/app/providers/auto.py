@@ -84,6 +84,7 @@ class AutoFallbackProvider(VTONProvider):
                     self.settings.provider_fallback_order
                 )
                 result.metadata["provider_runtime"] = provider_runtime.snapshot().get(name, {})
+                result.metadata["fallback_failures"] = failures
                 return result
             except ProviderConfigurationError:
                 raise

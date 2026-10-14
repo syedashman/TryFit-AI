@@ -16,16 +16,18 @@ export function friendlyError(input?: {
   if (
     code.includes("person_images_rejected") ||
     code.includes("photo_category_mismatch") ||
-    code.includes("invalid_person_image") ||
-    raw.includes("photo") ||
-    raw.includes("full-body") ||
-    raw.includes("full body")
+    code.includes("invalid_person_image")
   ) {
     return "This photo wasn't suitable for Try Fit. Choose another clear, well-lit photo.";
   }
 
+  if (code.includes("source_alignment_failed")) {
+    return "This result changed your pose or framing, so we didn't show it. Try generating again.";
+  }
+
   // Temporary infrastructure / auth / quota issues — retryable, not the user's fault.
   if (
+    code.includes("clothing_preservation_failed") ||
     code.includes("auth") ||
     code.includes("credential") ||
     code.includes("unavailable") ||
@@ -102,7 +104,7 @@ export function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-const BATCH_STORAGE_PREFIX = "tryfit:batch:";
+const BATCH_STORAGE_PREFIX = "tryfit:batch:source-pose-v1:";
 
 export function batchStorageKey(
   category: string,

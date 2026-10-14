@@ -5,7 +5,6 @@ import CameraCapture from "@/components/CameraCapture";
 import {
   MAX_PHOTOS,
   MIN_PHOTOS,
-  TRYFIT_OUTPUT_COUNT,
 } from "@/lib/useTryFit";
 import PhotoEditorModal from "./PhotoEditorModal";
 
@@ -57,7 +56,7 @@ export default function UploadPanel({
     <div>
       <h1 className="font-display text-[3.3rem] leading-[0.9] tracking-[-0.06em] text-[var(--tryfit-ink)]">See this look on you</h1>
       <p className="mt-3 max-w-xl text-base leading-relaxed text-[rgba(17,17,17,0.62)]">
-        Upload one clear photo. Try Fit creates three results using two guided poses and your original photo.
+        Upload up to three photos. Try Fit creates one result for each photo, keeping each uploaded pose.
       </p>
 
       <section aria-label="Photo framing examples" className="mt-6">
@@ -71,14 +70,14 @@ export default function UploadPanel({
           </figure>
           <figure className="relative aspect-[3/4] overflow-hidden border border-[var(--tryfit-line)] bg-[#e9e6df]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/photo-guide/cropped-half.jpg" alt="Example half-body, cropped person photo" className="h-full w-full object-cover object-center" />
-            <figcaption aria-label="Cropped example" className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#963930] text-lg font-semibold text-white shadow-sm">
-              ✕
+            <img src="/photo-guide/cropped-half.jpg" alt="Example half-body or cropped person photo" className="h-full w-full object-cover object-center" />
+            <figcaption aria-label="Good example" className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#285641] text-lg font-semibold text-white shadow-sm">
+              ✓
             </figcaption>
           </figure>
         </div>
         <p className="mt-3 text-sm text-[var(--tryfit-muted)]">
-          Upload a full-body image for better results.
+          Your photo remains the pose reference. The selected catalog image is used only as the garment reference.
         </p>
       </section>
 
@@ -96,6 +95,7 @@ export default function UploadPanel({
           ref={inputRef}
           type="file"
           accept="image/*"
+          multiple
           className="hidden"
           onChange={(event) => {
             queueImages(Array.from(event.currentTarget.files || []), "upload");
@@ -130,10 +130,10 @@ export default function UploadPanel({
       </div>
 
       <button disabled={!canSubmit} onClick={onGenerate} className="fabric-shimmer mt-7 w-full border border-[var(--tryfit-ink)] bg-[var(--tryfit-ink)] px-6 py-4 text-[0.7rem] font-medium uppercase tracking-[0.2em] text-[#f7f5f2] transition hover:bg-[var(--tryfit-olive)] disabled:cursor-not-allowed disabled:opacity-45">
-        Generate {TRYFIT_OUTPUT_COUNT} Try Fit results →
+        Generate {fileCount} {fileCount === 1 ? "Try Fit result" : "Try Fit results"} →
       </button>
       {fileCount > 0 && fileCount < MIN_PHOTOS && (
-        <p className="mt-2 text-xs text-[rgba(17,17,17,0.6)]">Upload at least {MIN_PHOTOS} photos to continue.</p>
+        <p className="mt-2 text-xs text-[rgba(17,17,17,0.6)]">Upload {MIN_PHOTOS - fileCount} more {MIN_PHOTOS - fileCount === 1 ? "photo" : "photos"} to continue.</p>
       )}
 
       {editQueue[0] && (

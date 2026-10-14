@@ -218,11 +218,15 @@ def generate_posed_reference(
 
     identity_image = identity_paths[0]
     identity_mime, identity_b64 = _encode(identity_image)
+    identity_face = _encode_face_crop(identity_image)
 
     prompt = (
         f"The only person shown is {subject_description} from the uploaded "
-        "image. Preserve this exact person's visible facial identity, age, "
-        "skin tone, hair, build, and all visible body proportions. Do not "
+        "image. Preserve this exact person's face and recognizable identity; "
+        "the enlarged face crop, when provided, is the authoritative facial "
+        "reference. Do not alter facial structure, eyes, nose, mouth, age, "
+        "skin tone, or hair. Preserve the person's build and all visible body "
+        "proportions. Do not "
         "beautify, idealize, slim, widen, or otherwise change the person. "
         "Keep body dimensions and silhouette grounded in the uploaded image; "
         "infer only body parts that are not visible and only as needed to "
@@ -230,8 +234,12 @@ def generate_posed_reference(
         "or may be used as an appearance reference. "
         f"Render this same person in the following target pose: "
         f"{POSE_PROMPTS[pose_name]} Generate a photorealistic full-body "
-        "photo, with the person head to feet and clear headroom above the head, "
-        "plain neutral studio background, soft even lighting. CRITICAL: "
+        "photograph with the person head to feet and clear headroom above "
+        "the head. Match the uploaded image's natural lighting, camera "
+        "perspective, color, texture, and background. Avoid studio backdrops, "
+        "artificial lighting, plastic or smoothed skin, beauty retouching, "
+        "and synthetic details. If framing must expand, extend the existing "
+        "scene naturally. CRITICAL: "
         "replace clothing with plain solid light-grey short-sleeve t-shirt "
         "and plain solid dark-grey trousers, without patterns, prints, "
         "embroidery, scarves, or draped fabric. Use simple plain footwear. "
@@ -247,6 +255,18 @@ def generate_posed_reference(
                 "role": "user",
                 "parts": [
                     {"inline_data": {"mime_type": identity_mime, "data": identity_b64}},
+                    *(
+                        [
+                            {
+                                "inline_data": {
+                                    "mime_type": identity_face[0],
+                                    "data": identity_face[1],
+                                }
+                            }
+                        ]
+                        if identity_face is not None
+                        else []
+                    ),
                     {"text": prompt},
                 ],
             }

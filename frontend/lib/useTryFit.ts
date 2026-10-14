@@ -9,7 +9,6 @@ import {
   retryJob,
 } from "./api";
 import { batchStorageKey, forgetBatch, rememberBatch } from "./tryfit";
-import { enhancePersonPhoto } from "./imageEnhancement";
 
 export type TryFitStage =
   | "upload"
@@ -19,8 +18,7 @@ export type TryFitStage =
   | "error";
 
 export const MIN_PHOTOS = 1;
-export const MAX_PHOTOS = 1;
-export const TRYFIT_OUTPUT_COUNT = 3;
+export const MAX_PHOTOS = 3;
 
 const POLL_INTERVAL_MS = 2500;
 
@@ -281,23 +279,25 @@ export function useTryFit({
     clearPoll();
     setStage("submitting");
     setErrorMessage(null);
-    setBatch(optimisticBatch(TRYFIT_OUTPUT_COUNT));
+    const personImages = files.slice(0, MAX_PHOTOS);
+    const expectedOutputs = personImages.length;
+    setBatch(optimisticBatch(expectedOutputs));
     setStage("processing");
     try {
-      const preparedFiles = await Promise.all(
-        files.map((file) => enhancePersonPhoto(file))
-      );
+      if (expectedOutputs < MIN_PHOTOS) {
+        throw new Error("Upload at least one personal photo before generating Try Fit.");
+      }
       const res = await generateTryOn({
         category,
         productNumber,
         color: colorName,
         clothType: "overall",
-        personImages: preparedFiles,
+        personImages,
       });
       const realJobs = (res.jobs || []).filter((job) => isRealJobId(job.job_id));
       if (
-        res.expected_outputs !== TRYFIT_OUTPUT_COUNT ||
-        realJobs.length !== TRYFIT_OUTPUT_COUNT
+        res.expected_outputs !== expectedOutputs ||
+        realJobs.length !== expectedOutputs
       ) {
         throw new Error("Try Fit returned incomplete job information.");
       }
@@ -432,8 +432,7 @@ export function useTryFit({
           : prev
       );
       try {
-        const preparedPhoto = await enhancePersonPhoto(photo);
-        const res = await replaceJobPhoto(jobId, preparedPhoto);
+        const res = await replaceJobPhoto(jobId, photo);
         if (res.batch_id) startBatchPolling(res.batch_id);
         else if (batch?.batch_id) startBatchPolling(batch.batch_id);
       } catch (err) {

@@ -244,7 +244,6 @@ def test_same_photo_retry_uses_same_person_for_both_rounds(
             reason="The same person is visible.",
         ),
     )
-
     job_service.process_job(
         record.job_id,
         settings,
@@ -358,7 +357,6 @@ def test_predefined_pose_quality_failure_falls_back_to_uploaded_photo(
             reason="The uploaded person is preserved.",
         ),
     )
-
     job_service.process_job(
         record.job_id,
         settings,
