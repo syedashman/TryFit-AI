@@ -75,7 +75,8 @@ export default function ResultsPanel({
         </div>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {/* On phones a full-width square card is too tall, so cap each card and center it. */}
+      <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[270px] sm:[&>*]:max-w-none">
         {batch.jobs.map((job, idx) => (
           job.status === "queued" ||
           job.status === "processing" ||
