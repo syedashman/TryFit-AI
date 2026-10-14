@@ -14,7 +14,8 @@ const PHOTO_GUIDES = {
     good: "/photo-guide/full-body.avif",
     bad: "/photo-guide/cropped-half.jpg",
   },
-  // Unsplash License: Anton K Wibowo (rUQSZdEQTMU) and Laura Chouette (nkWnc-W_GP8).
+  // Full body: supplied by the site owner. Half body: Laura Chouette on Unsplash
+  // (nkWnc-W_GP8, Unsplash License).
   women: {
     good: "/photo-guide/women-full-body.jpg",
     bad: "/photo-guide/women-half-body.jpg",
