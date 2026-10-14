@@ -83,9 +83,11 @@ export default function PhotoEditorModal({
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    // Only the crop box captures touches; elsewhere a swipe must still scroll the dialog.
+    if (!target.closest("[data-crop-box]")) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    const target = event.target as HTMLElement;
     dragRef.current = {
       pointerX: event.clientX,
       pointerY: event.clientY,
@@ -196,7 +198,7 @@ export default function PhotoEditorModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="photo-editor-title"
-        className="max-h-[96dvh] w-full max-w-2xl overflow-y-auto bg-[var(--tryfit-card)] p-4 shadow-2xl sm:max-h-[92dvh] sm:p-6"
+        className="max-h-[96dvh] w-full max-w-2xl overflow-y-auto overscroll-contain bg-[var(--tryfit-card)] p-4 shadow-2xl sm:max-h-[92dvh] sm:p-6"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -219,7 +221,7 @@ export default function PhotoEditorModal({
 
         <div
           ref={frameRef}
-          className="relative mx-auto mt-5 w-fit max-h-[55dvh] max-w-full touch-none select-none overflow-hidden bg-[#e9e6df]"
+          className="relative mx-auto mt-5 w-fit max-h-[42dvh] max-w-full select-none overflow-hidden bg-[#e9e6df] sm:max-h-[55dvh]"
           style={{
             width: displaySize.width || undefined,
             height: displaySize.height || undefined,
@@ -237,7 +239,7 @@ export default function PhotoEditorModal({
               alt="Photo being cropped"
               onLoad={updateImageSize}
               draggable={false}
-              className="block max-h-[55dvh] max-w-full object-contain"
+              className="block max-h-[42dvh] max-w-full object-contain sm:max-h-[55dvh]"
               style={{
                 width: displaySize.width || undefined,
                 height: displaySize.height || undefined,
@@ -263,13 +265,15 @@ export default function PhotoEditorModal({
             />
           </div>
           <div
+            data-crop-box
             className="absolute cursor-move border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.01)]"
             style={{
               left: `${crop.x * 100}%`,
               top: `${crop.y * 100}%`,
               width: `${crop.width * 100}%`,
               height: `${crop.height * 100}%`,
-              touchAction: "none",
+              // A full-height box can't move vertically, so let vertical swipes scroll the dialog.
+              touchAction: crop.height >= 1 ? "pan-y" : "none",
             }}
           >
             <span className="pointer-events-none absolute inset-1/3 border-x border-white/50" />
@@ -289,7 +293,7 @@ export default function PhotoEditorModal({
                 type="button"
                 data-crop-handle={handle}
                 aria-label={`Resize crop ${handle}`}
-                className={`pointer-events-auto absolute z-10 h-4 w-4 border-2 border-white bg-[var(--tryfit-olive)] ${position}`}
+                className={`pointer-events-auto absolute z-10 h-4 w-4 touch-none border-2 border-white bg-[var(--tryfit-olive)] ${position}`}
               />
             ))}
           </div>
