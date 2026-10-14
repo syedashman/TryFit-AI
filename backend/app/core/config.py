@@ -69,9 +69,10 @@ class Settings(BaseSettings):
     provider_circuit_cooldown_seconds: float = 30.0
     provider_health_cache_ttl_seconds: float = 15.0
 
-    # Bounded concurrency for independent uploaded-photo jobs. Keeps one batch
-    # responsive without hitting provider rate limits or memory spikes.
-    max_concurrent_jobs: int = 1
+    # Bounded concurrency for independent uploaded-photo jobs. Matches the
+    # 3-photo limit so a whole batch generates in parallel instead of queueing;
+    # lower it on very small instances if memory becomes a problem.
+    max_concurrent_jobs: int = 3
     tryfit_fast_mode: bool = False
     provider_max_image_dimension: int = 1536
     max_provider_long_side: int | None = None

@@ -154,10 +154,11 @@ behavior, not something wrong in this codebase.
 ## 7. Runtime and persistence notes
 
 Catalog jobs are executed in-process by a bounded `ThreadPoolExecutor`. The
-  default is `MAX_CONCURRENT_JOBS=1` (configurable from 1 to 3), so the backend
-  stays within tighter Render memory limits by default. Increase it only after
-uploaded photos can run concurrently without creating unlimited provider
-requests. One Vertex request asks for `VERTEX_CANDIDATE_COUNT` candidates
+default is `MAX_CONCURRENT_JOBS=3` (configurable from 1 to 3): one worker per
+uploaded photo, so a 3-photo batch generates in parallel instead of queueing.
+A local 3-photo run peaked at roughly 250–340 MB RSS; lower it to 2 on very
+small instances if memory becomes a problem. Per-photo validation and the
+Gemini category check also run concurrently during upload. One Vertex request asks for `VERTEX_CANDIDATE_COUNT` candidates
 (3 by default); the quality policy allows at most two same-photo generation
 rounds, and provider HTTP retries are separately controlled by
 `VERTEX_MAX_RETRIES`.
@@ -188,9 +189,13 @@ included downstream provider and candidate-processing work.
 `TRYFIT_FAST_MODE=true` is available for measured demonstrations. It uses a
 1024px provider image cap, one initial quality round, and skips optional visual
 enhancement. It does not disable identity, severe distortion, or garment
-fidelity gates. The default remains conservative: 1536px provider cap, up to
-two quality rounds, and two concurrent jobs. Set `MAX_CONCURRENT_JOBS=3` only
-after confirming Render resources and Vertex quota support it.
+fidelity gates. The default keeps a 1536px provider cap and up to two quality
+rounds, with three concurrent jobs.
+
+After parallel jobs and two false-rejection fixes (geometry is only rejected
+when both images were measured by the same detector and the person was not
+lost; catalog-face leakage requires a near-copy score of 0.80), the same
+benchmark finished all three looks in 94s with no failures (first result 61s).
 
 Memory diagnostics use the process RSS API available on the host and print
 current and peak values without logging image bytes. `DEBUG_IMAGE_DUMPS=false`

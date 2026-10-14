@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
     )
     log_memory("startup")
     ensure_storage(settings)
-    job_scheduler.configure(max_workers=max(1, min(settings.effective_concurrency, 2)))
+    job_scheduler.configure(max_workers=max(1, min(settings.effective_concurrency, 3)))
     try:
         yield
     finally:

@@ -39,6 +39,9 @@ COLOR_HARD_REJECT_BELOW = 0.55
 STRUCTURE_HARD_REJECT_BELOW = 0.40
 LENGTH_HARD_REJECT_BELOW = 0.40
 IDENTITY_HARD_REJECT_BELOW = 0.32
+# The face signal is pixel/edge correlation, so two frontal faces in similar
+# light already score ~0.6. Only a near-copy of the catalog face counts as leakage.
+CATALOG_LEAKAGE_MIN_SCORE = 0.80
 
 # Penalty applied to a hard-rejected candidate's final score so an eligible
 # candidate is always preferred when one exists.
@@ -280,6 +283,25 @@ def _hard_reject(
     )
 
 
+def _geometry_evidence_reliable(
+    reference: BodyGeometryProfile,
+    candidate: BodyGeometryProfile,
+) -> bool:
+    """Whether body-geometry penalties reflect the image rather than a detector miss.
+
+    Try-on output keeps the source framing, so a subject that "shrinks" to under
+    half its original height means the person detector latched onto the wrong
+    region (common with the HOG fallback), not that the body was distorted.
+    Boxes from different detectors are also not comparable.
+    """
+    if reference.detector != candidate.detector:
+        return False
+    return (
+        candidate.foreground_height_ratio
+        >= 0.5 * reference.foreground_height_ratio
+    )
+
+
 def choose_best_candidate(
     candidate_paths: list[Path],
     render_reference: BodyGeometryProfile,
@@ -361,7 +383,10 @@ def choose_best_candidate(
             # Body-geometry distortion is tracked independently of garment
             # fidelity so the provider can tell the two failure classes apart
             # (distorted_tryon_result vs garment_fidelity_failed).
-            geometry_rejected = _hard_reject(penalties)
+            geometry_rejected = _geometry_evidence_reliable(
+                render_reference,
+                candidate,
+            ) and _hard_reject(penalties)
 
             validation_errors: dict[str, str] = {}
 
@@ -384,7 +409,7 @@ def choose_best_candidate(
                 catalog_leakage = bool(
                     identity_reliable
                     and catalog_face_reliable
-                    and catalog_face_score >= 0.60
+                    and catalog_face_score >= CATALOG_LEAKAGE_MIN_SCORE
                     and catalog_face_score > identity_score + 0.08
                 )
 

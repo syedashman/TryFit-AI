@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import logging
 from copy import deepcopy
@@ -210,11 +211,11 @@ async def generate_catalog_tryon(
     logger.debug("Batch preprocessing seconds=%.2f", decode_resize_elapsed)
     log_memory("after_upload_normalization")
 
+    # Photos are independent, so validate them concurrently; gather keeps order.
     validation_started = time.perf_counter()
-    person_reports = []
-    for person_path in person_paths:
-        person_reports.append(
-            await run_in_threadpool(
+    person_reports = await asyncio.gather(
+        *(
+            run_in_threadpool(
                 validate_person_images,
                 [person_path],
                 min_images=1,
@@ -226,7 +227,9 @@ async def generate_catalog_tryon(
                 identity_hard_reject_threshold=settings.identity_hard_reject_threshold,
                 cloth_type=cloth_type,
             )
+            for person_path in person_paths
         )
+    )
     rejected_reports = [
         report.to_dict()
         for report in person_reports
@@ -247,16 +250,18 @@ async def generate_catalog_tryon(
     logger.debug("Batch person validation seconds=%.2f", validation_elapsed)
 
     category_started = time.perf_counter()
-    category_results = []
-    for person_path in person_paths:
-        category_results.append(
-            await run_in_threadpool(
+    # One Gemini call per photo; run them concurrently instead of back to back.
+    category_results = await asyncio.gather(
+        *(
+            run_in_threadpool(
                 check_photos_match_category,
                 settings,
                 [person_path],
                 category_name,
             )
+            for person_path in person_paths
         )
+    )
     category_elapsed = time.perf_counter() - category_started
     logger.debug("Batch category validation seconds=%.2f", category_elapsed)
     category_errors = [

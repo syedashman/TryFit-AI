@@ -24,7 +24,8 @@ def test_auto_provider_is_allowed():
 
 def test_max_concurrent_jobs_has_safe_default():
     settings = Settings(_env_file=None)
-    assert settings.max_concurrent_jobs == 1
+    # One worker per uploaded photo (max 3), so a batch generates in parallel.
+    assert settings.max_concurrent_jobs == 3
     assert 1 <= settings.max_concurrent_jobs <= 3
 
 

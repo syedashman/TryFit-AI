@@ -42,7 +42,7 @@ class JobScheduler:
                 logger.warning("JOB %s already scheduled -> skip duplicate scheduling", job_id)
                 return
             if self._executor is None:
-                self.configure(max_workers=max(1, min(settings.effective_concurrency, 2)))
+                self.configure(max_workers=max(1, min(settings.effective_concurrency, 3)))
             executor = self._executor
             self._active_job_ids.add(job_id)
 
