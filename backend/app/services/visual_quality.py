@@ -63,6 +63,23 @@ def _contrast_score(image: Image.Image) -> float:
     return round(min(1.0, float(ImageStat.Stat(gray).stddev[0]) / 64.0), 4)
 
 
+def preview_path_for(result_path: Path) -> Path:
+    return result_path.with_name(f"{result_path.stem}-preview.jpg")
+
+
+def write_result_preview(result_path: Path, *, quality: int = 85) -> Path:
+    """Write a JPEG copy of a result for on-screen display.
+
+    Results are lossless PNGs of 1-2+ MB; on mobile data from a small host they
+    took long enough to download that finished cards looked empty. The JPEG
+    keeps full resolution at a fraction of the size; downloads stay PNG.
+    """
+    preview = preview_path_for(result_path)
+    with Image.open(result_path) as opened:
+        opened.convert("RGB").save(preview, "JPEG", quality=quality, optimize=False, progressive=True)
+    return preview
+
+
 def enhance_result_image(
     path: Path,
     *,

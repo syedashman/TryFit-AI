@@ -119,6 +119,11 @@ export default function ResultsPanel({
         <ImageLightbox
           src={jobResultUrl(
             batch.jobs[lightboxIndex].job_id!,
+            batch.jobs[lightboxIndex].updated_at,
+            { preview: true }
+          )}
+          downloadSrc={jobResultUrl(
+            batch.jobs[lightboxIndex].job_id!,
             batch.jobs[lightboxIndex].updated_at
           )}
           alt={`Try Fit look ${lightboxIndex + 1}`}

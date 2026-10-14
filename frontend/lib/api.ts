@@ -187,9 +187,21 @@ export async function fetchJobStatus(jobId: string): Promise<BatchJob> {
   return res.json();
 }
 
-export function jobResultUrl(jobId: string, version?: string): string {
+/**
+ * `preview` returns a lightweight JPEG for on-screen display; omit it for the
+ * full-quality PNG used by downloads.
+ */
+export function jobResultUrl(
+  jobId: string,
+  version?: string,
+  { preview = false }: { preview?: boolean } = {}
+): string {
+  const params = new URLSearchParams();
+  if (version) params.set("v", version);
+  if (preview) params.set("preview", "1");
+  const query = params.toString();
   const base = apiUrl(`/api/jobs/${jobId}/result`);
-  return version ? `${base}?v=${encodeURIComponent(version)}` : base;
+  return query ? `${base}?${query}` : base;
 }
 
 export async function replaceJobPhoto(

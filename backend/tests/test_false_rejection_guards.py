@@ -75,3 +75,17 @@ def test_frontal_face_resemblance_is_not_catalog_leakage(tmp_path: Path, monkeyp
 
     assert winner == candidate
     assert scores[0].catalog_leakage is False
+
+
+def test_result_preview_is_full_size_jpeg(tmp_path: Path) -> None:
+    from app.services.visual_quality import preview_path_for, write_result_preview
+
+    result = tmp_path / "job.png"
+    _person(result, width=576, height=768)
+
+    preview = write_result_preview(result)
+
+    assert preview == preview_path_for(result) == tmp_path / "job-preview.jpg"
+    with Image.open(preview) as image:
+        assert image.format == "JPEG"
+        assert image.size == (576, 768)

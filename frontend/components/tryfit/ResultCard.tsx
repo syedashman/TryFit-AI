@@ -31,9 +31,15 @@ export default function ResultCard({
   const filename = resultFilename({ category, productNumber, index: index + 1 });
   const isProcessing =
     isRetrying || job.status === "processing" || job.status === "queued";
+  // Full PNG for downloads; a light JPEG of the same image for display.
   const resultUrl = job.job_id
     ? jobResultUrl(job.job_id, job.updated_at)
     : null;
+  const previewUrl = job.job_id
+    ? jobResultUrl(job.job_id, job.updated_at, { preview: true })
+    : null;
+  const [loadedPreview, setLoadedPreview] = useState<string | null>(null);
+  const previewLoading = previewUrl !== null && loadedPreview !== previewUrl;
 
   function handleReplacement(event: React.ChangeEvent<HTMLInputElement>) {
     const photo = event.target.files?.[0];
@@ -55,20 +61,32 @@ export default function ResultCard({
       <div
         className={`group relative aspect-square overflow-hidden border border-[var(--tryfit-line)] bg-[var(--tryfit-panel)] ${actionsRevealed ? "tryfit-actions-revealed" : ""}`}
       >
-        {job.status === "completed" && !isRetrying && resultUrl ? (
+        {job.status === "completed" && !isRetrying && previewUrl ? (
           <button
             onClick={handleImageClick}
             className="relative block h-full w-full"
             aria-label={`View look ${index + 1} fullscreen`}
           >
+            {previewLoading && (
+              <span
+                className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--tryfit-line)] border-t-[var(--tryfit-olive)]" />
+                <span className="text-sm text-[var(--tryfit-muted)]">Loading image…</span>
+              </span>
+            )}
             <Image
-              src={resultUrl}
+              src={previewUrl}
               alt={`Try Fit look ${index + 1}`}
               fill
               sizes="(max-width: 768px) 50vw, 300px"
-              className="object-contain"
+              className={`object-contain transition-opacity duration-300 ${previewLoading ? "opacity-0" : "opacity-100"}`}
               unoptimized
-              loading="lazy"
+              priority
+              onLoad={() => setLoadedPreview(previewUrl)}
+              onError={() => setLoadedPreview(previewUrl)}
             />
           </button>
         ) : isProcessing ? (

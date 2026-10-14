@@ -18,6 +18,7 @@ from app.services.quality_engine import (
 )
 from app.services.visual_quality import (
     enhance_result_image,
+    write_result_preview,
 )
 from app.services.phase3c2_quality import build_phase3c2_report
 from app.services.body_geometry import build_body_geometry_profile
@@ -687,6 +688,7 @@ def process_job(
                     contrast=settings.visual_enhancement_contrast,
                     color=settings.visual_enhancement_color,
                 )
+                write_result_preview(final_path)
             metadata["visual_enhancement"] = enhancement.to_dict()
 
         generation_rounds_raw = (

@@ -15,6 +15,7 @@ type FitSize = {
 
 export default function ImageLightbox({
   src,
+  downloadSrc,
   alt,
   filename,
   onClose,
@@ -24,6 +25,8 @@ export default function ImageLightbox({
   hasNext,
 }: {
   src: string;
+  /** Full-quality file to download when `src` is a lighter display copy. */
+  downloadSrc?: string;
   alt: string;
   filename?: string;
   onClose: () => void;
@@ -157,8 +160,8 @@ export default function ImageLightbox({
   }, [resetView, src]);
 
   const handleDownload = useCallback(() => {
-    downloadImage(src, filename || "tryfit-look.png");
-  }, [src, filename]);
+    downloadImage(downloadSrc || src, filename || "tryfit-look.png");
+  }, [downloadSrc, src, filename]);
 
   const handleWheel = useCallback(
     (event: React.WheelEvent<HTMLDivElement>) => {

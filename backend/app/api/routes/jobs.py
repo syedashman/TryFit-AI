@@ -16,6 +16,7 @@ from app.services.body_geometry import build_body_geometry_profile
 from app.services.garment_analyzer import analyze_garment
 from app.services.commercial_prompt import build_commercial_instructions
 from app.services.storage import list_jobs, load_job, save_job, save_upload
+from app.services.visual_quality import preview_path_for, write_result_preview
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 QualityPreset = Literal["fast", "balanced", "high"]
@@ -218,7 +219,7 @@ def get_job(job_id: str) -> JobRecord:
 
 
 @router.get("/{job_id}/result", operation_id="get_tryon_result")
-def get_job_result(job_id: str):
+def get_job_result(job_id: str, preview: bool = False):
     settings = get_settings()
     record = load_job(job_id, settings)
     if record is None:
@@ -231,7 +232,20 @@ def get_job_result(job_id: str):
         if results_root not in path.parents:
             raise HTTPException(status_code=403, detail="Unsafe result path rejected.")
         if path.exists() and path.is_file():
-            return FileResponse(path, filename=f"tryfit-{job_id}{path.suffix}")
+            # The frontend versions result URLs (?v=updated_at), so a given URL
+            # never changes content and can be cached by the browser.
+            cache_headers = {"Cache-Control": "public, max-age=86400"}
+            if preview:
+                preview_path = preview_path_for(path)
+                if not preview_path.exists():
+                    # Results finished before previews existed.
+                    write_result_preview(path)
+                return FileResponse(preview_path, media_type="image/jpeg", headers=cache_headers)
+            return FileResponse(
+                path,
+                filename=f"tryfit-{job_id}{path.suffix}",
+                headers=cache_headers,
+            )
     if record.result_url:
         return {"result_url": record.result_url}
     raise HTTPException(status_code=404, detail="No result file is available.")
