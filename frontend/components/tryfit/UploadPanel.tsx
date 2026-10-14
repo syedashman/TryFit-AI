@@ -8,7 +8,21 @@ import {
 } from "@/lib/useTryFit";
 import PhotoEditorModal from "./PhotoEditorModal";
 
+// Framing examples per catalog category: a full-body photo works, a half-body one doesn't.
+const PHOTO_GUIDES = {
+  men: {
+    good: "/photo-guide/full-body.avif",
+    bad: "/photo-guide/cropped-half.jpg",
+  },
+  // Unsplash License: Anton K Wibowo (rUQSZdEQTMU) and Laura Chouette (nkWnc-W_GP8).
+  women: {
+    good: "/photo-guide/women-full-body.jpg",
+    bad: "/photo-guide/women-half-body.jpg",
+  },
+};
+
 export default function UploadPanel({
+  category,
   previews,
   fileCount,
   canSubmit,
@@ -17,6 +31,7 @@ export default function UploadPanel({
   onRemove,
   onGenerate,
 }: {
+  category: string;
   previews: string[];
   fileCount: number;
   canSubmit: boolean;
@@ -29,6 +44,7 @@ export default function UploadPanel({
   const [showCamera, setShowCamera] = useState(false);
   const [editQueue, setEditQueue] = useState<File[]>([]);
   const [editSource, setEditSource] = useState<"upload" | "camera" | null>(null);
+  const guide = category === "women" ? PHOTO_GUIDES.women : PHOTO_GUIDES.men;
 
   function queueImages(files: File[], source: "upload" | "camera") {
     const availableSlots = Math.max(0, MAX_PHOTOS - fileCount);
@@ -63,16 +79,16 @@ export default function UploadPanel({
         <div className="grid max-w-sm grid-cols-2 gap-3">
           <figure className="relative aspect-[3/4] overflow-hidden border border-[var(--tryfit-line)] bg-[#e9e6df]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/photo-guide/full-body.avif" alt="Example full-body person photo" className="h-full w-full object-cover object-center" />
+            <img src={guide.good} alt="Example full-body person photo" className="h-full w-full object-cover object-center" />
             <figcaption aria-label="Good example" className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#285641] text-lg font-semibold text-white shadow-sm">
               ✓
             </figcaption>
           </figure>
           <figure className="relative aspect-[3/4] overflow-hidden border border-[var(--tryfit-line)] bg-[#e9e6df]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/photo-guide/cropped-half.jpg" alt="Example half-body or cropped person photo" className="h-full w-full object-cover object-center" />
-            <figcaption aria-label="Good example" className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#285641] text-lg font-semibold text-white shadow-sm">
-              ✓
+            <img src={guide.bad} alt="Example half-body or cropped person photo" className="h-full w-full object-cover object-center" />
+            <figcaption aria-label="Bad example: half-body photos don't work" className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#b3261e] text-lg font-semibold text-white shadow-sm">
+              ✕
             </figcaption>
           </figure>
         </div>

@@ -122,6 +122,7 @@ export default function TryFitStudio({
         <div ref={workspaceRef}>
           {tf.stage === "upload" && (
             <UploadPanel
+              category={categoryKey}
               previews={tf.previews}
               fileCount={tf.files.length}
               canSubmit={tf.canSubmit}
