@@ -56,7 +56,7 @@ export default function UploadPanel({
     <div>
       <h1 className="font-display text-[3.3rem] leading-[0.9] tracking-[-0.06em] text-[var(--tryfit-ink)]">See this look on you</h1>
       <p className="mt-3 max-w-xl text-base leading-relaxed text-[rgba(17,17,17,0.62)]">
-        Upload up to three photos. Try Fit creates one result for each photo, keeping each uploaded pose.
+        You can try this look on <strong className="font-semibold text-[var(--tryfit-ink)]">up to {MAX_PHOTOS} photos at once</strong>. Try Fit creates one result for each photo, keeping each uploaded pose.
       </p>
 
       <section aria-label="Photo framing examples" className="mt-6">
@@ -82,6 +82,14 @@ export default function UploadPanel({
       </section>
 
       <div className="mt-6 rounded-lg border border-[rgba(17,17,17,0.12)] bg-[#f8f7f4] p-5">
+        <div className="mb-4 flex items-baseline justify-between gap-3">
+          <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--tryfit-ink)]">
+            Your photos
+          </p>
+          <p className="text-xs text-[var(--tryfit-muted)]">
+            <span className="font-semibold text-[var(--tryfit-ink)]">{fileCount} / {MAX_PHOTOS}</span> photos · 1 result each
+          </p>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <button onClick={() => inputRef.current?.click()} disabled={fileCount >= MAX_PHOTOS} className="flex items-center justify-center gap-3 border border-[rgba(17,17,17,0.2)] bg-transparent px-4 py-4 text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--tryfit-ink)] transition hover:border-[var(--tryfit-ink)] disabled:cursor-not-allowed disabled:opacity-40">
             <span>Upload Photos</span>
@@ -114,18 +122,39 @@ export default function UploadPanel({
           </div>
         )}
 
-        {previews.length > 0 && (
-          <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-5">
-            {previews.map((src, idx) => (
-              <div key={src} className="relative aspect-[3/4] overflow-hidden border border-[rgba(17,17,17,0.08)] bg-[#efede9]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={src} alt={`Upload ${idx + 1}`} className="h-full w-full object-cover" />
-                <button onClick={() => onRemove(idx)} className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-[rgba(17,17,17,0.7)] text-[#f7f5f2]" aria-label={`Remove photo ${idx + 1}`}>
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
+        {/* Always show every slot so shoppers can see more than one photo is allowed. */}
+        <div className="mt-5 grid max-w-md grid-cols-3 gap-3">
+          {Array.from({ length: MAX_PHOTOS }).map((_, idx) => {
+            const src = previews[idx];
+            if (src) {
+              return (
+                <div key={src} className="relative aspect-[3/4] overflow-hidden border border-[rgba(17,17,17,0.08)] bg-[#efede9]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={src} alt={`Upload ${idx + 1}`} className="h-full w-full object-cover" />
+                  <button onClick={() => onRemove(idx)} className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-[rgba(17,17,17,0.7)] text-[#f7f5f2]" aria-label={`Remove photo ${idx + 1}`}>
+                    ×
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <button
+                key={`empty-${idx}`}
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                aria-label={`Add photo ${idx + 1}`}
+                className="flex aspect-[3/4] flex-col items-center justify-center gap-1 border border-dashed border-[rgba(17,17,17,0.25)] text-[var(--tryfit-muted)] transition hover:border-[var(--tryfit-ink)] hover:text-[var(--tryfit-ink)]"
+              >
+                <span className="text-2xl leading-none">+</span>
+                <span className="text-[0.62rem] uppercase tracking-[0.14em]">Add photo</span>
+              </button>
+            );
+          })}
+        </div>
+        {fileCount > 0 && fileCount < MAX_PHOTOS && (
+          <p className="mt-3 text-xs text-[var(--tryfit-muted)]">
+            Add {MAX_PHOTOS - fileCount} more {MAX_PHOTOS - fileCount === 1 ? "photo" : "photos"} to get {MAX_PHOTOS - fileCount === 1 ? "another result" : `${MAX_PHOTOS - fileCount} more results`}.
+          </p>
         )}
       </div>
 

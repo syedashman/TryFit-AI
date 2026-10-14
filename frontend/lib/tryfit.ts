@@ -45,7 +45,7 @@ export function friendlyError(input?: {
 
   // Generation / fidelity / distortion failures — most common case.
   // Also the safe default for anything we don't explicitly recognise.
-  return "We couldn't create this look from this photo. Try again.";
+  return "We tried to create this look with your photo, but something went wrong. Please upload a clear photo like the suggested examples, or try again.";
 }
 
 /**
