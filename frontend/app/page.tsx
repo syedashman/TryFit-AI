@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useRef } from "react";
+import Link from "next/link";
 import { gsap } from "gsap";
 import CatalogBrowser from "@/components/CatalogBrowser";
 import { API_BASE } from "@/lib/api";
@@ -121,18 +122,18 @@ export default function HomePage() {
               essentials.
             </p>
             <div data-hero-reveal="cta" className="mt-8 flex flex-wrap gap-3">
-              <a
-                href="#catalog"
+              <Link
+                href="/?category=men#catalog"
                 className="fabric-shimmer inline-flex items-center justify-center rounded-none border border-[var(--tryfit-ink)] bg-[var(--tryfit-ink)] px-7 py-4 text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-[#f5f3ee] transition hover:bg-[var(--tryfit-olive)]"
               >
                 Shop Men
-              </a>
-              <a
-                href="#catalog"
+              </Link>
+              <Link
+                href="/?category=women#catalog"
                 className="inline-flex items-center justify-center border border-[rgba(17,17,17,0.35)] bg-transparent px-7 py-4 text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-[var(--tryfit-ink)] transition hover:border-[var(--tryfit-ink)]"
               >
                 Shop Women
-              </a>
+              </Link>
             </div>
           </div>
 

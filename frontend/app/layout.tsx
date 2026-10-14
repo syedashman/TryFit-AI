@@ -9,6 +9,14 @@ export const metadata: Metadata = {
     "Virtual try-on for online fashion stores. Upload a few photos, see the outfit on you, buy with confidence.",
 };
 
+// "#catalog" scrolls to the product grid on the home page.
+const NAV_LINKS = [
+  { label: "Men", href: "/?category=men#catalog" },
+  { label: "Women", href: "/?category=women#catalog" },
+  { label: "New Arrivals", href: "/?category=women#catalog" },
+  { label: "Collections", href: "/?category=men#catalog" },
+];
+
 export default function RootLayout({
   children,
 }: {
@@ -20,10 +28,11 @@ export default function RootLayout({
         <header className="sticky top-0 z-40 border-b border-[rgba(17,17,17,0.12)] bg-[rgba(242,239,233,0.92)] backdrop-blur-md">
           <div className="mx-auto flex max-w-[1280px] items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <nav className="hidden items-center gap-7 md:flex">
-              <Link href="/?category=men" className="nav-link">Men</Link>
-              <Link href="/?category=women" className="nav-link">Women</Link>
-              <Link href="/?category=women" className="nav-link">New Arrivals</Link>
-              <Link href="/?category=men" className="nav-link">Collections</Link>
+              {NAV_LINKS.map((link) => (
+                <Link key={link.label} href={link.href} className="nav-link">
+                  {link.label}
+                </Link>
+              ))}
             </nav>
 
             <Link href="/" className="absolute left-1/2 -translate-x-1/2 text-center">
@@ -41,6 +50,13 @@ export default function RootLayout({
               </Link>
             </div>
           </div>
+          <nav className="flex items-center justify-center gap-6 overflow-x-auto px-4 pb-3 md:hidden">
+            {NAV_LINKS.map((link) => (
+              <Link key={link.label} href={link.href} className="nav-link whitespace-nowrap text-[0.7rem]">
+                {link.label}
+              </Link>
+            ))}
+          </nav>
           <div className="thread-divider" />
         </header>
         <main>{children}</main>

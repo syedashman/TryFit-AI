@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CatalogResponse, fetchCatalog } from "@/lib/api";
 import ProductCard from "./ProductCard";
 
@@ -12,10 +12,14 @@ const TABS: { key: "men" | "women"; label: string }[] = [
 
 export default function CatalogBrowser() {
   const searchParams = useSearchParams();
-  const initial = (searchParams.get("category") as "men" | "women") || "women";
-  const [active, setActive] = useState<"men" | "women">(
-    TABS.some((t) => t.key === initial) ? initial : "women"
-  );
+  const router = useRouter();
+  const pathname = usePathname();
+  // The URL is the source of truth so navbar links (?category=...) switch the tab
+  // even when the home page is already open.
+  const active: "men" | "women" =
+    searchParams.get("category") === "men" ? "men" : "women";
+  const setActive = (key: "men" | "women") =>
+    router.replace(`${pathname}?category=${key}`, { scroll: false });
   const [data, setData] = useState<CatalogResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
