@@ -31,6 +31,9 @@ class BodyGeometryProfile:
 
 BBox = tuple[int, int, int, int]
 
+# Longest side used for geometry analysis; profiles are resolution-independent.
+GEOMETRY_ANALYSIS_MAX_SIDE = 768
+
 
 def _clamp_bbox(
     bbox: BBox,
@@ -455,12 +458,29 @@ def build_body_geometry_profile(
             f"Could not read geometry image {path}: {exc}"
         ) from exc
 
-    height, width = rgb.shape[:2]
+    original_height, original_width = rgb.shape[:2]
 
-    if height < 2 or width < 2:
+    if original_height < 2 or original_width < 2:
         raise ValueError(
             f"Geometry image is too small: {path}"
         )
+
+    # Every measurement below is a ratio, so analyse a bounded-size copy; edge
+    # detection on full provider-size images was a large share of job CPU time.
+    analysis_scale = min(
+        1.0,
+        GEOMETRY_ANALYSIS_MAX_SIDE / max(original_height, original_width),
+    )
+    if analysis_scale < 1.0:
+        rgb = cv2.resize(
+            rgb,
+            None,
+            fx=analysis_scale,
+            fy=analysis_scale,
+            interpolation=cv2.INTER_AREA,
+        )
+
+    height, width = rgb.shape[:2]
 
     bbox, detector = _subject_bbox(rgb)
 
@@ -531,10 +551,10 @@ def build_body_geometry_profile(
 
     return BodyGeometryProfile(
         source_file=str(path),
-        width=width,
-        height=height,
+        width=original_width,
+        height=original_height,
         aspect_ratio=round(
-            width / max(1, height),
+            original_width / max(1, original_height),
             4,
         ),
         foreground_width_ratio=round(

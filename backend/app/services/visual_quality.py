@@ -105,7 +105,9 @@ def enhance_result_image(
                 working = working.convert("RGB")
                 save_kwargs = {"quality": 95, "subsampling": 0, "optimize": True}
             elif suffix == ".png":
-                save_kwargs = {"optimize": True}
+                # Lossless either way; optimize=True tries every strategy and
+                # took ~2s per result, which is minutes on a small CPU.
+                save_kwargs = {"compress_level": 3}
 
             working.save(path, **save_kwargs)
             output = working

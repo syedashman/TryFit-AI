@@ -30,6 +30,7 @@ from app.services.candidate_selector import (
     NoEligibleCandidateError,
     choose_best_candidate,
 )
+from app.services.image_work_gate import heavy_image_work
 from app.services.image_normalizer import (
     normalize_for_provider,
 )
@@ -678,16 +679,17 @@ class VertexTryOnProvider(VTONProvider):
         if candidate_paths:
             validation_started = time.perf_counter()
             try:
-                chosen_path, scores = choose_best_candidate(
-                    candidate_paths,
-                    render_reference_profile,
-                    full_body_reference_profile,
-                    garment_reference_path=request.garment_image,
-                    identity_reference_path=(
-                        request.identity_reference_image or person
-                    ),
-                    catalog_identity_reference_path=garment,
-                )
+                with heavy_image_work():
+                    chosen_path, scores = choose_best_candidate(
+                        candidate_paths,
+                        render_reference_profile,
+                        full_body_reference_profile,
+                        garment_reference_path=request.garment_image,
+                        identity_reference_path=(
+                            request.identity_reference_image or person
+                        ),
+                        catalog_identity_reference_path=garment,
+                    )
                 eligible_count = sum(1 for s in scores if not s.hard_rejected) if scores else 1
                 action = "accept" if eligible_count > 0 else "regenerate"
                 logger.info(

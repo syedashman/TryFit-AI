@@ -43,6 +43,9 @@ IDENTITY_HARD_REJECT_BELOW = 0.32
 # light already score ~0.6. Only a near-copy of the catalog face counts as leakage.
 CATALOG_LEAKAGE_MIN_SCORE = 0.80
 
+# Longest side used for face detection; faces in try-on photos are large.
+FACE_DETECTION_MAX_SIDE = 640
+
 # Penalty applied to a hard-rejected candidate's final score so an eligible
 # candidate is always preferred when one exists.
 HARD_REJECT_PENALTY = 0.30
@@ -159,17 +162,28 @@ def _crop_face(path: Path | None) -> np.ndarray | None:
     image = cv2.imread(str(path_obj), cv2.IMREAD_GRAYSCALE)
     if image is None:
         return None
+    # Detect on a downscaled copy (cascade cost grows with pixel count), then
+    # map the box back and crop from the full-resolution image.
+    scale = min(1.0, FACE_DETECTION_MAX_SIDE / max(image.shape[:2]))
+    search = (
+        cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if scale < 1.0
+        else image
+    )
     faces = []
     with _FACE_DETECTOR_LOCK:
         for detector in _get_face_detectors():
             detected = detector.detectMultiScale(
-                image,
+                search,
                 scaleFactor=1.1,
                 minNeighbors=5,
                 minSize=(24, 24),
             )
             if len(detected):
-                faces = detected
+                faces = [
+                    tuple(int(round(value / scale)) for value in box)
+                    for box in detected
+                ]
                 break
     if len(faces) == 0:
         if len(_FACE_CROP_CACHE) > 64:

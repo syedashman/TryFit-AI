@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # 3-photo limit so a whole batch generates in parallel instead of queueing;
     # lower it on very small instances if memory becomes a problem.
     max_concurrent_jobs: int = 3
+    # Of those jobs, how many may score candidates / post-process results at
+    # once. 1 keeps small hosts within memory; raise it on multi-core machines.
+    max_concurrent_image_processing: int = 1
     tryfit_fast_mode: bool = False
     provider_max_image_dimension: int = 1536
     max_provider_long_side: int | None = None

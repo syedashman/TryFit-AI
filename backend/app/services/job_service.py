@@ -34,6 +34,7 @@ from app.services.storage import (
     list_batch_jobs,
 )
 from app.services.memory_metrics import log_memory
+from app.services.image_work_gate import heavy_image_work
 
 logger = logging.getLogger(__name__)
 _IDENTITY_REVIEW_TRIGGER_SCORE = 0.82
@@ -678,13 +679,14 @@ def process_job(
                 )
 
         if final_path is not None:
-            enhancement = enhance_result_image(
-                final_path,
-                enabled=settings.visual_enhancement_enabled and not settings.tryfit_fast_mode,
-                sharpness=settings.visual_enhancement_sharpness,
-                contrast=settings.visual_enhancement_contrast,
-                color=settings.visual_enhancement_color,
-            )
+            with heavy_image_work():
+                enhancement = enhance_result_image(
+                    final_path,
+                    enabled=settings.visual_enhancement_enabled and not settings.tryfit_fast_mode,
+                    sharpness=settings.visual_enhancement_sharpness,
+                    contrast=settings.visual_enhancement_contrast,
+                    color=settings.visual_enhancement_color,
+                )
             metadata["visual_enhancement"] = enhancement.to_dict()
 
         generation_rounds_raw = (
@@ -748,12 +750,13 @@ def process_job(
                         path = Path(sibling.result_file)
                         if path.exists():
                             sibling_paths.append(path)
-            report_3c2 = build_phase3c2_report(
-                garment_path=Path(record.garment_file),
-                result_path=final_path,
-                sibling_paths=sibling_paths,
-                provider_metadata=metadata,
-            )
+            with heavy_image_work():
+                report_3c2 = build_phase3c2_report(
+                    garment_path=Path(record.garment_file),
+                    result_path=final_path,
+                    sibling_paths=sibling_paths,
+                    provider_metadata=metadata,
+                )
             record.phase3c2_report = report_3c2
             metadata["phase3c2_quality"] = report_3c2
         record.error = None

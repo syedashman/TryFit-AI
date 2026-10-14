@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -47,8 +48,23 @@ def get_garment_quality_profile(garment: Path | str | GarmentQualityProfile) -> 
 
 
 def _rgb(path: Path, size: tuple[int, int] = (256, 256)) -> np.ndarray:
+    # Colour and structure checks both read each candidate; decoding a full-size
+    # PNG dominates, so reuse the small thumbnail while the file is unchanged.
+    stat = Path(path).stat()
+    return _rgb_cached(str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size, size)
+
+
+@lru_cache(maxsize=16)
+def _rgb_cached(
+    path: str,
+    mtime_ns: int,
+    file_size: int,
+    size: tuple[int, int],
+) -> np.ndarray:
     with Image.open(path) as image:
-        return np.asarray(image.convert("RGB").resize(size), dtype=np.uint8)
+        thumbnail = np.asarray(image.convert("RGB").resize(size), dtype=np.uint8)
+    thumbnail.setflags(write=False)
+    return thumbnail
 
 
 def perceptual_hash(path: Path, hash_size: int = 16) -> str:
